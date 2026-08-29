@@ -19,7 +19,6 @@ import {
 import {
   computeRespectEvent,
   deriveEffortSignal,
-  type EffortEvidence,
   type RespectDelta,
 } from '../engine/respectEngine.js';
 import { clamp } from '../util/clamp.js';
@@ -110,18 +109,15 @@ export interface SubmitEvidenceParams {
 
 export interface JudgeOptions {
   userId: string;
-  priorFailureConfirmed?: boolean;
-  baselineDifficulty?: number;
-  recentSameBandCompletions?: number;
-  consecutiveLowEffortFailures?: number;
   observationCategory?: string;
   observationText?: string;
   observationValence?: 'positive' | 'neutral' | 'negative';
-  effortEvidence?: Partial<EffortEvidence>;
 }
 
 export interface ChallengeEngineDependencies {
   client: SupabaseClientLike;
+  /** Verified server/Edge identity. Never populate this from request input. */
+  authenticatedUserId: string;
   router?: ModelRouter;
   evaluator?: AIProvider;
 }
@@ -153,6 +149,16 @@ interface EvidenceSubmissionRow {
   content: string;
   metadata?: Record<string, unknown>;
   created_at: string;
+}
+
+interface JudgmentHistoryRow {
+  challenge_id: string;
+  verdict: 'passed' | 'failed' | 'needs_more_evidence';
+}
+
+interface EvidenceSubmissionResult {
+  submission_id: string;
+  evidence_round: number;
 }
 
 function difficultyNumberToBand(num: number): string {
@@ -225,11 +231,16 @@ function mapRowToEvidenceSubmission(row: EvidenceSubmissionRow): EvidenceSubmiss
 
 export class ChallengeEngine {
   private readonly client: SupabaseClientLike;
+  private readonly authenticatedUserId: string;
   private readonly router?: ModelRouter;
   private readonly explicitEvaluator?: AIProvider;
 
   constructor(deps: ChallengeEngineDependencies) {
     this.client = deps.client;
+    if (!deps.authenticatedUserId) {
+      throw new StoreValidationError('ChallengeEngine requires a verified authenticated user ID.');
+    }
+    this.authenticatedUserId = deps.authenticatedUserId;
     this.router = deps.router;
     this.explicitEvaluator = deps.evaluator;
   }
@@ -238,6 +249,48 @@ export class ChallengeEngine {
     if (this.explicitEvaluator) return this.explicitEvaluator;
     if (this.router) return this.router.forEvaluation();
     throw new StoreError('No evaluator AI provider configured in ChallengeEngine.');
+  }
+
+  private assertAuthenticatedIdentity(userId: string, challengeId = 'requested resource'): void {
+    if (userId !== this.authenticatedUserId) {
+      throw new UnauthorizedChallengeError(challengeId, userId);
+    }
+  }
+
+  private async getJudgmentContext(userId: string, currentChallenge: Challenge): Promise<{
+    priorFailureConfirmed: boolean;
+    baselineDifficulty: number;
+    recentSameBandCompletions: number;
+    consecutiveLowEffortFailures: number;
+  }> {
+    const [{ data: history, error: historyError }, { data: challenges, error: challengesError }] = await Promise.all([
+      this.client.from<JudgmentHistoryRow>('judgments').select('challenge_id, verdict').eq('user_id', userId),
+      this.client.from<ChallengeRow>('challenges').select('*').eq('user_id', userId),
+    ]);
+    if (historyError || challengesError) {
+      throw new DatabaseError('Failed to derive judgment context from stored history.', historyError?.code || challengesError?.code);
+    }
+    const priorHistory = (history || []).filter((item) => item.challenge_id !== currentChallenge.id);
+    const challengeById = new Map((challenges || []).map((row) => [row.id, mapRowToChallenge(row)]));
+    const historicalDifficulties = priorHistory
+      .map((item) => challengeById.get(item.challenge_id)?.difficulty)
+      .filter((difficulty): difficulty is number => difficulty !== undefined);
+    const baselineDifficulty = historicalDifficulties.length
+      ? Math.round(historicalDifficulties.reduce((sum, difficulty) => sum + difficulty, 0) / historicalDifficulties.length)
+      : 5;
+    let consecutiveLowEffortFailures = 0;
+    for (const item of priorHistory) {
+      if (item.verdict !== 'failed') break;
+      consecutiveLowEffortFailures += 1;
+    }
+    return {
+      priorFailureConfirmed: priorHistory.some((item) => item.verdict === 'failed'),
+      baselineDifficulty: clamp(baselineDifficulty, 1, 10),
+      recentSameBandCompletions: priorHistory.filter((item) =>
+        item.verdict === 'passed' && challengeById.get(item.challenge_id)?.difficulty === currentChallenge.difficulty,
+      ).length,
+      consecutiveLowEffortFailures,
+    };
   }
 
   /**
@@ -273,6 +326,10 @@ export class ChallengeEngine {
    * Creates a new challenge with status = 'issued'.
    */
   async issue(userId: string, params: IssueChallengeParams): Promise<Challenge> {
+    this.assertAuthenticatedIdentity(userId);
+    if (params.userId !== userId) {
+      throw new UnauthorizedChallengeError('new challenge', params.userId);
+    }
     if (!userId) {
       throw new StoreValidationError('userId is required to issue a challenge.');
     }
@@ -348,6 +405,7 @@ export class ChallengeEngine {
     userId: string,
     changes: NegotiateChallengeChanges,
   ): Promise<Challenge> {
+    this.assertAuthenticatedIdentity(userId, challengeId);
     const challenge = await this.getChallenge(challengeId);
 
     if (challenge.userId !== userId) {
@@ -373,36 +431,18 @@ export class ChallengeEngine {
     const updatedDuration = changes.expectedDurationMinutes !== undefined
       ? changes.expectedDurationMinutes
       : challenge.expectedDurationMinutes;
-    const updatedVerification = changes.verificationLevel || challenge.verificationLevel;
-    const updatedHypothesis = changes.hypothesis !== undefined
-      ? changes.hypothesis
-      : challenge.hypothesis;
-
-    const parametersPayload: Record<string, unknown> = {
-      domain: challenge.domain,
-      difficulty_number: updatedDifficulty,
-      constraints: updatedConstraints,
-      expected_duration_minutes: updatedDuration,
-      verification_level: updatedVerification,
-      hypothesis: updatedHypothesis,
-      evidence_round: challenge.evidenceRound,
-    };
-
-    const updatePayload: Record<string, unknown> = {
-      title: updatedObjective,
-      difficulty: difficultyNumberToBand(updatedDifficulty),
-      status: 'negotiated',
-      parameters: parametersPayload,
-      updated_at: new Date().toISOString(),
-    };
-
-    const { data, error } = await this.client
-      .from<ChallengeRow>('challenges')
-      .update(updatePayload)
-      .eq('id', challengeId)
-      .eq('user_id', userId)
-      .select()
-      .single();
+    if (changes.verificationLevel !== undefined || changes.hypothesis !== undefined) {
+      throw new StoreValidationError('Only objective, difficulty, constraints, and expected duration may change during negotiation.');
+    }
+    const { data, error } = await this.client.rpc<ChallengeRow>('transition_challenge_negotiation', {
+      p_challenge_id: challengeId,
+      p_user_id: userId,
+      p_objective: updatedObjective,
+      p_difficulty: difficultyNumberToBand(updatedDifficulty),
+      p_difficulty_number: updatedDifficulty,
+      p_constraints: updatedConstraints,
+      p_expected_duration_minutes: updatedDuration,
+    });
 
     if (error || !data) {
       throw new DatabaseError(
@@ -410,21 +450,6 @@ export class ChallengeEngine {
         error?.code,
       );
     }
-
-    // Append negotiation event
-    await this.client.from('events').insert({
-      user_id: userId,
-      event_type: 'challenge_negotiated',
-      payload: {
-        challenge_id: challengeId,
-        previous_status: challenge.status,
-        changes: {
-          objective: updatedObjective !== challenge.objective ? updatedObjective : undefined,
-          difficulty: updatedDifficulty !== challenge.difficulty ? updatedDifficulty : undefined,
-          constraints: updatedConstraints,
-        },
-      },
-    });
 
     return mapRowToChallenge(data);
   }
@@ -434,6 +459,7 @@ export class ChallengeEngine {
    * Moves challenge to 'accepted' using authoritative transition RPC.
    */
   async accept(challengeId: string, userId: string): Promise<Challenge> {
+    this.assertAuthenticatedIdentity(userId, challengeId);
     const challenge = await this.getChallenge(challengeId);
 
     if (challenge.userId !== userId) {
@@ -474,6 +500,7 @@ export class ChallengeEngine {
    * Moves challenge from 'accepted' -> 'started'.
    */
   async start(challengeId: string, userId: string): Promise<Challenge> {
+    this.assertAuthenticatedIdentity(userId, challengeId);
     const challenge = await this.getChallenge(challengeId);
 
     if (challenge.userId !== userId) {
@@ -514,6 +541,7 @@ export class ChallengeEngine {
    * Moves challenge from 'started' -> 'attempted'.
    */
   async attempt(challengeId: string, userId: string): Promise<Challenge> {
+    this.assertAuthenticatedIdentity(userId, challengeId);
     const challenge = await this.getChallenge(challengeId);
 
     if (challenge.userId !== userId) {
@@ -557,6 +585,7 @@ export class ChallengeEngine {
     challengeId: string,
     params: SubmitEvidenceParams,
   ): Promise<{ submissionId: string; challenge: Challenge }> {
+    this.assertAuthenticatedIdentity(params.userId, challengeId);
     const challenge = await this.getChallenge(challengeId);
 
     if (challenge.userId !== params.userId) {
@@ -585,7 +614,7 @@ export class ChallengeEngine {
     const kind = params.kind || 'text';
     const metadata = params.metadata || {};
 
-    const { data: submissionId, error } = await this.client.rpc<string>(
+    const { data: submission, error } = await this.client.rpc<EvidenceSubmissionResult>(
       'record_evidence_submission',
       {
         p_challenge_id: challengeId,
@@ -596,7 +625,7 @@ export class ChallengeEngine {
       },
     );
 
-    if (error || !submissionId) {
+    if (error || !submission) {
       throw new DatabaseError(
         `Failed to submit evidence for challenge "${challengeId}": ${error?.message || 'Unknown error'}`,
         error?.code,
@@ -606,8 +635,8 @@ export class ChallengeEngine {
     const updatedChallenge = await this.getChallenge(challengeId);
 
     return {
-      submissionId,
-      challenge: updatedChallenge,
+      submissionId: submission.submission_id,
+      challenge: { ...updatedChallenge, evidenceRound: submission.evidence_round },
     };
   }
 
@@ -617,6 +646,7 @@ export class ChallengeEngine {
    * and invokes the authoritative judge_challenge Postgres RPC.
    */
   async judge(challengeId: string, options: JudgeOptions): Promise<Judgment> {
+    this.assertAuthenticatedIdentity(options.userId, challengeId);
     const challenge = await this.getChallenge(challengeId);
 
     if (challenge.userId !== options.userId) {
@@ -651,6 +681,9 @@ export class ChallengeEngine {
     }
 
     const latestEvidence = mapRowToEvidenceSubmission(evidenceRows[0]);
+    if (latestEvidence.challengeId !== challengeId || latestEvidence.userId !== options.userId) {
+      throw new MissingEvidenceError(challengeId);
+    }
 
     // Call evaluator AI provider (advisory)
     const evaluator = this.getEvaluator();
@@ -662,20 +695,22 @@ export class ChallengeEngine {
       metadata: latestEvidence.metadata,
     });
 
-    if (!evaluation || !['completed', 'failed', 'needs_more_evidence'].includes(evaluation.outcome)) {
+    if (!evaluation || !['completed', 'failed', 'needs_more_evidence'].includes(evaluation.outcome)
+      || !Number.isFinite(evaluation.confidence) || evaluation.confidence < 0 || evaluation.confidence > 1
+      || typeof evaluation.reasoning !== 'string') {
       throw new InvalidEvaluationError(
         `Invalid evaluator outcome received: "${String(evaluation?.outcome)}"`,
       );
     }
 
     // Derive effort signal deterministically from observable data
-    const effortEvidence: EffortEvidence = {
+    const effortEvidence = {
       attempted: true,
       meaningfulSubmission: latestEvidence.content.trim().length > 10,
       attemptCount: latestEvidence.round,
-      ...options.effortEvidence,
     };
     const effortSignal = deriveEffortSignal(effortEvidence);
+    const context = await this.getJudgmentContext(options.userId, challenge);
 
     // Compute deterministic respect and relationship deltas
     let respectDelta: RespectDelta = {
@@ -688,25 +723,25 @@ export class ChallengeEngine {
     };
 
     if (evaluation.outcome === 'completed') {
-      if (options.priorFailureConfirmed) {
+      if (context.priorFailureConfirmed) {
         respectDelta = computeRespectEvent({
           type: 'recovery',
-          priorFailureConfirmed: true,
+          priorFailureConfirmed: context.priorFailureConfirmed,
           effortSignal,
         });
       } else {
         respectDelta = computeRespectEvent({
           type: 'challenge_completed',
           difficulty: challenge.difficulty,
-          userBaselineDifficulty: options.baselineDifficulty ?? 5,
-          recentSameBandCompletions: options.recentSameBandCompletions ?? 0,
+          userBaselineDifficulty: context.baselineDifficulty,
+          recentSameBandCompletions: context.recentSameBandCompletions,
         });
       }
     } else if (evaluation.outcome === 'failed') {
       respectDelta = computeRespectEvent({
         type: 'challenge_failed',
         effortSignal,
-        consecutiveLowEffortFailures: options.consecutiveLowEffortFailures ?? 0,
+        consecutiveLowEffortFailures: context.consecutiveLowEffortFailures,
       });
     }
 
@@ -767,6 +802,7 @@ export class ChallengeEngine {
    * Moves challenge to 'closed' status.
    */
   async close(challengeId: string, userId: string): Promise<Challenge> {
+    this.assertAuthenticatedIdentity(userId, challengeId);
     const challenge = await this.getChallenge(challengeId);
 
     if (challenge.userId !== userId) {

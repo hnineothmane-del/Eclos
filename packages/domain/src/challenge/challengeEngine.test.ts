@@ -17,11 +17,13 @@ describe('ChallengeEngine', () => {
   let challengesTable: Record<string, any>;
   let evidenceTable: Record<string, any[]>;
   let eventsTable: any[];
+  let judgmentCount: number;
 
   beforeEach(() => {
     challengesTable = {};
     evidenceTable = {};
     eventsTable = [];
+    judgmentCount = 0;
 
     fakeEvaluator = new FakeAIProvider({
       defaultEvaluationResult: {
@@ -125,6 +127,21 @@ describe('ChallengeEngine', () => {
           }
           return { data: null, error: { message: 'Challenge not found' } };
         }
+        if (fn === 'transition_challenge_negotiation') {
+          const ch = challengesTable[params.p_challenge_id];
+          if (ch) {
+            ch.title = params.p_objective;
+            ch.difficulty = params.p_difficulty;
+            ch.status = 'negotiated';
+            ch.parameters = {
+              ...ch.parameters,
+              difficulty_number: params.p_difficulty_number,
+              constraints: params.p_constraints,
+              expected_duration_minutes: params.p_expected_duration_minutes,
+            };
+            return { data: ch, error: null };
+          }
+        }
         if (fn === 'record_evidence_submission') {
           const ch = challengesTable[params.p_challenge_id];
           if (ch) {
@@ -145,13 +162,17 @@ describe('ChallengeEngine', () => {
             evidenceTable[params.p_challenge_id] = list;
             ch.status = 'evidence_submitted';
             ch.parameters = { ...ch.parameters, evidence_round: round };
-            return { data: subId, error: null };
+            return { data: { submission_id: subId, evidence_round: round }, error: null };
           }
         }
         if (fn === 'judge_challenge') {
           const ch = challengesTable[params.p_challenge_id];
           if (ch) {
+            if (ch.status !== 'evidence_submitted') {
+              return { data: null, error: { message: 'Challenge must be in evidence_submitted state to be judged' } };
+            }
             ch.status = params.p_verdict === 'needs_more_evidence' ? 'needs_more_evidence' : 'judged';
+            judgmentCount += 1;
             return {
               data: {
                 judgment_id: 'judg-101',
@@ -169,6 +190,7 @@ describe('ChallengeEngine', () => {
 
     engine = new ChallengeEngine({
       client: mockClient,
+      authenticatedUserId: 'user-1',
       evaluator: fakeEvaluator,
     });
   });
@@ -313,6 +335,7 @@ describe('ChallengeEngine', () => {
 
       expect(submissionId).toBeDefined();
       expect(challenge.status).toBe('evidence_submitted');
+      expect(challenge.evidenceRound).toBe(1);
       expect(mockClient.rpc).toHaveBeenCalledWith(
         'record_evidence_submission',
         expect.objectContaining({
@@ -383,7 +406,6 @@ describe('ChallengeEngine', () => {
 
       const judgment = await engine.judge(ch.id, {
         userId: 'user-1',
-        baselineDifficulty: 5,
       });
 
       expect(judgment.outcome).toBe('completed');
@@ -431,7 +453,7 @@ describe('ChallengeEngine', () => {
       expect(judgment.respectDelta).toBe(0); // non-streak failure = 0
     });
 
-    it('awards recovery respect only if priorFailureConfirmed is true', async () => {
+    it('does not allow a caller to fabricate recovery state', async () => {
       const ch = await engine.issue('user-1', {
         userId: 'user-1',
         domain: 'coding',
@@ -452,13 +474,10 @@ describe('ChallengeEngine', () => {
         reasoning: 'Bug completely resolved.',
       });
 
-      const judgment = await engine.judge(ch.id, {
-        userId: 'user-1',
-        priorFailureConfirmed: true,
-      });
+      const judgment = await engine.judge(ch.id, { userId: 'user-1' });
 
-      expect(judgment.respectDelta).toBe(5); // Recovery base = 5
-      expect(judgment.trustDelta).toBe(2);
+      expect(judgment.respectDelta).toBe(4);
+      expect(judgment.trustDelta).toBe(1);
     });
 
     it('rejects judging challenge not in evidence_submitted state (prevents double judgment)', async () => {
@@ -472,6 +491,43 @@ describe('ChallengeEngine', () => {
       await expect(
         engine.judge(ch.id, { userId: 'user-1' }),
       ).rejects.toThrow(InvalidChallengeTransitionError);
+    });
+
+    it('rejects a second judgment after a completed judgment', async () => {
+      const ch = await engine.issue('user-1', { userId: 'user-1', domain: 'coding', objective: 'Test', difficulty: 5 });
+      await engine.accept(ch.id, 'user-1');
+      await engine.start(ch.id, 'user-1');
+      await engine.submitEvidence(ch.id, { userId: 'user-1', content: 'Completed with proof.' });
+      await engine.judge(ch.id, { userId: 'user-1' });
+
+      await expect(engine.judge(ch.id, { userId: 'user-1' })).rejects.toThrow(InvalidChallengeTransitionError);
+    });
+
+    it('allows only one of two concurrent judgment attempts', async () => {
+      const ch = await engine.issue('user-1', { userId: 'user-1', domain: 'coding', objective: 'Concurrent test', difficulty: 5 });
+      await engine.accept(ch.id, 'user-1');
+      await engine.start(ch.id, 'user-1');
+      await engine.submitEvidence(ch.id, { userId: 'user-1', content: 'Completed with proof.' });
+
+      const attempts = await Promise.allSettled([
+        engine.judge(ch.id, { userId: 'user-1' }),
+        engine.judge(ch.id, { userId: 'user-1' }),
+      ]);
+
+      expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+      expect(attempts.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
+      expect(judgmentCount).toBe(1);
+    });
+
+    it('rejects judgment after an evaluator requests more evidence', async () => {
+      const ch = await engine.issue('user-1', { userId: 'user-1', domain: 'coding', objective: 'Test', difficulty: 5 });
+      await engine.accept(ch.id, 'user-1');
+      await engine.start(ch.id, 'user-1');
+      await engine.submitEvidence(ch.id, { userId: 'user-1', content: 'Ambiguous evidence.' });
+      fakeEvaluator.setEvaluationResult({ outcome: 'needs_more_evidence', confidence: 0.7, reasoning: 'Need another screenshot.' });
+      await engine.judge(ch.id, { userId: 'user-1' });
+
+      await expect(engine.judge(ch.id, { userId: 'user-1' })).rejects.toThrow(InvalidChallengeTransitionError);
     });
 
     it('rejects malformed evaluation results from AI provider', async () => {
@@ -497,6 +553,29 @@ describe('ChallengeEngine', () => {
       await expect(
         engine.judge(ch.id, { userId: 'user-1' }),
       ).rejects.toThrow(InvalidEvaluationError);
+    });
+
+    it('rejects evidence that does not belong to the authenticated challenge owner', async () => {
+      const ch = await engine.issue('user-1', { userId: 'user-1', domain: 'fitness', objective: 'Pushups', difficulty: 5 });
+      await engine.accept(ch.id, 'user-1');
+      await engine.start(ch.id, 'user-1');
+      await engine.submitEvidence(ch.id, { userId: 'user-1', content: 'Did them.' });
+      evidenceTable[ch.id][0].user_id = 'user-2';
+
+      await expect(engine.judge(ch.id, { userId: 'user-1' })).rejects.toThrow(MissingEvidenceError);
+    });
+
+    it('ignores extra AI relationship fields and uses deterministic deltas only', async () => {
+      const ch = await engine.issue('user-1', { userId: 'user-1', domain: 'fitness', objective: 'Pushups', difficulty: 5 });
+      await engine.accept(ch.id, 'user-1');
+      await engine.start(ch.id, 'user-1');
+      await engine.submitEvidence(ch.id, { userId: 'user-1', content: 'Completed all repetitions.' });
+      fakeEvaluator.setEvaluationResult({
+        outcome: 'completed', confidence: 0.9, reasoning: 'Complete.', respectDelta: 100,
+      } as any);
+
+      const judgment = await engine.judge(ch.id, { userId: 'user-1' });
+      expect(judgment.respectDelta).toBe(4);
     });
   });
 
