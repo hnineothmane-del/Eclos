@@ -15,6 +15,10 @@ function isObject(val: unknown): val is Record<string, unknown> {
   return typeof val === 'object' && val !== null && !Array.isArray(val);
 }
 
+function isFiniteConfidence(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
 /**
  * Validates that an untyped object matches the AIResponseContract specification.
  * Throws InvalidStructuredOutputError on failure.
@@ -69,8 +73,8 @@ export function validateAIResponseContract(data: unknown, rawText?: string): AIR
         if (!isObject(item.suggestedPayload)) {
           issues.push(`eventSuggestions[${i}].suggestedPayload must be an object`);
         }
-        if (typeof item.confidence !== 'number' || Number.isNaN(item.confidence)) {
-          issues.push(`eventSuggestions[${i}].confidence must be a valid number`);
+        if (!isFiniteConfidence(item.confidence)) {
+          issues.push(`eventSuggestions[${i}].confidence must be a finite number between 0 and 1`);
         }
         eventSuggestions.push(item as unknown as AIEventSuggestion);
       }
@@ -99,8 +103,8 @@ export function validateAIResponseContract(data: unknown, rawText?: string): AIR
         if (typeof item.key !== 'string') {
           issues.push(`memoryCandidates[${i}].key must be a string`);
         }
-        if (typeof item.confidence !== 'number' || Number.isNaN(item.confidence)) {
-          issues.push(`memoryCandidates[${i}].confidence must be a valid number`);
+        if (!isFiniteConfidence(item.confidence)) {
+          issues.push(`memoryCandidates[${i}].confidence must be a finite number between 0 and 1`);
         }
         memoryCandidates.push(item as unknown as AIMemoryCandidate);
       }
@@ -172,8 +176,8 @@ export function validateEvaluationResult(data: unknown, rawText?: string): Evalu
     issues.push(`outcome must be 'completed', 'failed', or 'needs_more_evidence' (received "${String(data.outcome)}")`);
   }
 
-  if (typeof data.confidence !== 'number' || Number.isNaN(data.confidence)) {
-    issues.push('confidence must be a valid number');
+  if (!isFiniteConfidence(data.confidence)) {
+    issues.push('confidence must be a finite number between 0 and 1');
   }
 
   if (typeof data.reasoning !== 'string') {
@@ -213,8 +217,8 @@ export function validateMultimodalAnalysisResult(data: unknown, rawText?: string
     issues.push('description must be a string');
   }
 
-  if (typeof data.confidence !== 'number' || Number.isNaN(data.confidence)) {
-    issues.push('confidence must be a valid number');
+  if (!isFiniteConfidence(data.confidence)) {
+    issues.push('confidence must be a finite number between 0 and 1');
   }
 
   if (issues.length > 0) {

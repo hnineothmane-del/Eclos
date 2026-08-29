@@ -13,6 +13,7 @@ import {
   ProviderUnavailableError,
   RateLimitError,
   UpstreamRequestError,
+  sanitizeErrorMessage,
 } from './errors.js';
 import {
   validateAIResponseContract,
@@ -105,8 +106,8 @@ export class GeminiProvider implements AIProvider {
     try {
       const errorJson = (await response.json()) as { error?: { message?: string } };
       if (errorJson?.error?.message) {
-        // Redact any potential API key that might be in the error message
-        errorDetails = errorJson.error.message.replace(/key=[^&\s]+/gi, 'key=[REDACTED]');
+        // Run full sanitization before exposing details
+        errorDetails = sanitizeErrorMessage(errorJson.error.message);
       }
     } catch {
       // Ignore body parse errors on HTTP failure
@@ -116,7 +117,7 @@ export class GeminiProvider implements AIProvider {
 
     if (status === 401 || status === 403) {
       throw new AuthenticationError(
-        errorDetails ? `Authentication failed: ${errorDetails}` : 'Gemini API authentication failed (invalid or forbidden API key)',
+        errorDetails ? `Authentication failed (${status}): ${errorDetails}` : `Gemini API authentication failed (${status} - invalid or forbidden API key)`,
       );
     }
 
@@ -144,50 +145,19 @@ export class GeminiProvider implements AIProvider {
 
   private extractOutputText(data: unknown): string {
     if (!data || typeof data !== 'object') {
-      throw new InvalidStructuredOutputError('Received empty or non-object response from Gemini API');
+      throw new InvalidStructuredOutputError('Gemini Interactions response was empty or not an object.');
     }
 
     const obj = data as Record<string, unknown>;
+    const outputText = obj.output_text;
 
-    // Interactions API response formats: output_text, output, outputs, or choices
-    if (typeof obj.output_text === 'string') {
-      return obj.output_text;
+    if (typeof outputText !== 'string' || outputText.trim() === '') {
+      throw new InvalidStructuredOutputError(
+        'Gemini Interactions response missing expected output_text string.',
+      );
     }
 
-    if (typeof obj.text === 'string') {
-      return obj.text;
-    }
-
-    if (Array.isArray(obj.outputs) && obj.outputs.length > 0) {
-      const first = obj.outputs[0] as Record<string, unknown>;
-      if (typeof first.text === 'string') return first.text;
-      if (first.content && typeof first.content === 'object') {
-        const contentObj = first.content as Record<string, unknown>;
-        if (typeof contentObj.text === 'string') return contentObj.text;
-      }
-    }
-
-    if (Array.isArray(obj.candidates) && obj.candidates.length > 0) {
-      const cand = obj.candidates[0] as Record<string, unknown>;
-      const content = cand.content as Record<string, unknown> | undefined;
-      if (Array.isArray(content?.parts) && content.parts.length > 0) {
-        const part = content.parts[0] as Record<string, unknown>;
-        if (typeof part.text === 'string') return part.text;
-      }
-    }
-
-    if (typeof obj.output === 'string') {
-      return obj.output;
-    }
-
-    if (typeof obj.output === 'object' && obj.output !== null) {
-      return JSON.stringify(obj.output);
-    }
-
-    throw new InvalidStructuredOutputError(
-      'Unable to locate valid text output in Gemini API response payload',
-      JSON.stringify(data),
-    );
+    return outputText;
   }
 
   async generate(options: GenerateOptions): Promise<AIResponseContract> {

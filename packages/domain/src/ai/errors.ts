@@ -1,3 +1,25 @@
+export function sanitizeErrorMessage(message: string): string {
+  let value = String(message ?? '');
+  const redacted = '[REDACTED]';
+
+  // Completely remove or heavily redact authorization strings
+  value = value
+    // Scrub "API key xyz" or "API_KEY=xyz"
+    .replace(/(?:api[-_\s]*key)(?:\s*[:=]\s*|\s+)([^\s'",&]+)/gi, `API_KEY=${redacted}`)
+    // Scrub "key=xyz"
+    .replace(/(?:key\s*[:=]\s*)([^\s'",&]+)/gi, `key=${redacted}`)
+    // Scrub "Authorization: Bearer xyz", "Authorization xyz"
+    .replace(/(?:authorization)(?:\s*[:=]\s*|\s+)(?:bearer\s+)?([^\s'",]+)/gi, `[REDACTED_AUTH]`)
+    // Scrub generic bearer tokens
+    .replace(/(?:bearer\s+)([a-zA-Z0-9._~+/-]+)/gi, `[REDACTED_BEARER]`)
+    // Scrub URLs containing secrets/tokens
+    .replace(/https?:\/\/[^\s"'<>]+(?:key|token|auth)[^\s"'<>]*/gi, '[REDACTED_URL]')
+    // Scrub raw request headers block
+    .replace(/(?:request\s+)?headers?(?:\s*[:=]\s*|\s+)(?:{[^}]*}|[^\n]+)/gi, '[REDACTED_HEADERS]');
+
+  return value;
+}
+
 /**
  * Base class for all AI provider errors.
  */
@@ -6,7 +28,7 @@ export class AIProviderError extends Error {
   readonly status?: number;
 
   constructor(message: string, code = 'AI_PROVIDER_ERROR', status?: number) {
-    super(message);
+    super(sanitizeErrorMessage(message));
     this.name = this.constructor.name;
     this.code = code;
     this.status = status;
@@ -32,8 +54,8 @@ export class InvalidStructuredOutputError extends AIProviderError {
 
   constructor(message: string, rawOutput?: string, validationIssues?: string[]) {
     super(message, 'INVALID_STRUCTURED_OUTPUT', 422);
-    this.rawOutput = rawOutput;
-    this.validationIssues = validationIssues;
+    this.rawOutput = rawOutput ? sanitizeErrorMessage(rawOutput).slice(0, 500) : undefined;
+    this.validationIssues = validationIssues?.map((issue) => sanitizeErrorMessage(issue));
   }
 }
 

@@ -91,17 +91,12 @@ describe('GeminiProvider', () => {
       expect(result.observationCandidates).toHaveLength(1);
     });
 
-    it('handles markdown wrapped JSON output correctly', async () => {
-      const mockPayload = {
-        response: 'Clean markdown roast',
-        intent: 'tease',
-      };
-
+    it('throws InvalidStructuredOutputError on malformed JSON payload', async () => {
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
         json: async () => ({
-          outputs: [{ text: '```json\n' + JSON.stringify(mockPayload) + '\n```' }],
+          output_text: 'NOT_VALID_JSON',
         }),
       } as unknown as Response);
 
@@ -111,18 +106,34 @@ describe('GeminiProvider', () => {
         fetchFn: mockFetch,
       });
 
-      const result = await provider.generate({ prompt: 'test' });
-      expect(result.response).toBe('Clean markdown roast');
-      expect(result.intent).toBe('tease');
+      await expect(provider.generate({ prompt: 'test' })).rejects.toThrow(
+        InvalidStructuredOutputError,
+      );
     });
 
-    it('throws InvalidStructuredOutputError on malformed JSON payload', async () => {
+    it('throws InvalidStructuredOutputError when output_text is missing', async () => {
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
-        json: async () => ({
-          output_text: 'NOT_VALID_JSON',
-        }),
+        json: async () => ({ unexpected: { foo: 'bar' } }),
+      } as unknown as Response);
+
+      const provider = new GeminiProvider({
+        apiKey: 'key',
+        model: 'gemini-flash',
+        fetchFn: mockFetch,
+      });
+
+      await expect(provider.generate({ prompt: 'test' })).rejects.toThrow(
+        InvalidStructuredOutputError,
+      );
+    });
+
+    it('throws InvalidStructuredOutputError on unexpected response shape', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ text: 'not allowed by the project contract' }),
       } as unknown as Response);
 
       const provider = new GeminiProvider({
@@ -242,6 +253,60 @@ describe('GeminiProvider', () => {
       });
 
       await expect(provider.generate({ prompt: 'test' })).rejects.toThrow(AuthenticationError);
+
+      try {
+        await provider.generate({ prompt: 'test' });
+      } catch (error) {
+        const message = String(error);
+        expect(message).not.toContain('secret-12345');
+        expect(message).toContain('Authentication');
+      }
+    });
+
+    it('sanitizes Authorization headers and preserves safe details', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        headers: new Headers({ Authorization: 'Bearer secret-token-xyz' }),
+        json: async () => ({ error: { message: 'Authorization: Bearer secret-token-xyz is invalid' } }),
+      } as unknown as Response);
+
+      const provider = new GeminiProvider({
+        apiKey: 'secret-token-xyz',
+        model: 'gemini-flash',
+        fetchFn: mockFetch,
+      });
+
+      try {
+        await provider.generate({ prompt: 'test' });
+      } catch (error) {
+        const message = String(error);
+        expect(message).not.toContain('secret-token-xyz');
+        expect(message).not.toContain('Authorization');
+        expect(message).toContain('401');
+      }
+    });
+
+    it('rejects invalid 0-1 confidence values', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          output_text: JSON.stringify({
+            response: 'ok',
+            intent: 'test',
+            eventSuggestions: [{ suggestedEventType: 'challenge_failed', suggestedPayload: { reason: 'x' }, confidence: 1.1 }],
+          }),
+        }),
+      } as unknown as Response);
+
+      const provider = new GeminiProvider({
+        apiKey: 'key',
+        model: 'gemini-flash',
+        fetchFn: mockFetch,
+      });
+
+      await expect(provider.generate({ prompt: 'test' })).rejects.toThrow(InvalidStructuredOutputError);
     });
 
     it('throws RateLimitError on 429 with parsed retry-after', async () => {
