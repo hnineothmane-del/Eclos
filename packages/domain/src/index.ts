@@ -4,3 +4,4 @@ export * from './challenge/index.js';
 export * from './memory/index.js';
 export * from './ai/index.js';
 export * from './billing/index.js';
+export * from './util/clamp.js';
