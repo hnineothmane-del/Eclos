@@ -161,39 +161,12 @@ export class SupabaseHumorStateStore implements IHumorStateStore {
       throw new StoreValidationError('theme is required to record humor usage.');
     }
 
-    const effectiveTarget = target || 'general';
-    const effectiveIntensity = Math.max(1, Math.min(10, intensity));
-    const nowIso = new Date().toISOString();
-
-    // Check if existing record exists to increment usage_count
-    const { data: existing } = await this.client
-      .from<HumorLedgerRow>('humor_ledger')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('theme', theme)
-      .eq('target', effectiveTarget)
-      .maybeSingle();
-
-    const nextUsageCount = existing ? existing.usage_count + 1 : 1;
-
-    const payload: Record<string, unknown> = {
-      user_id: userId,
-      theme,
-      target: effectiveTarget,
-      intensity: effectiveIntensity,
-      usage_count: nextUsageCount,
-      last_used_at: nowIso,
-    };
-
-    if (existing?.id) {
-      payload.id = existing.id;
-    }
-
-    const { data, error } = await this.client
-      .from<HumorLedgerRow>('humor_ledger')
-      .upsert(payload, { onConflict: 'user_id,theme,target' })
-      .select()
-      .single();
+    const { data, error } = await this.client.rpc<HumorLedgerRow>('record_humor_usage', {
+      p_user_id: userId,
+      p_theme: theme,
+      p_target: target || 'general',
+      p_intensity: intensity,
+    });
 
     if (error || !data) {
       throw new DatabaseError(

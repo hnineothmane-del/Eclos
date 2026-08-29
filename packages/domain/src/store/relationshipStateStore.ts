@@ -10,7 +10,6 @@ import { DatabaseError, StoreValidationError, NotFoundError } from './errors.js'
 export interface ApplyDeltaOptions {
   eventType?: EventType;
   payload?: Record<string, unknown>;
-  mode?: RelationshipMode;
 }
 
 export interface IRelationshipStateStore {
@@ -20,7 +19,6 @@ export interface IRelationshipStateStore {
     deltas: RelationshipDeltas,
     options?: ApplyDeltaOptions,
   ): Promise<{ eventId: string; state: RelationshipState }>;
-  setMode(userId: string, mode: RelationshipMode): Promise<RelationshipState>;
 }
 
 interface RelationshipStateRow {
@@ -36,24 +34,6 @@ interface RelationshipStateRow {
   created_at?: string;
   updated_at: string;
 }
-
-const VALID_MODES = new Set<RelationshipMode>([
-  'adaptive',
-  'permanent_rival',
-  'sparring',
-  'coaching',
-  'mocking',
-  'observing',
-  'dismissive',
-]);
-
-const DB_MODES = new Set([
-  'sparring',
-  'coaching',
-  'mocking',
-  'observing',
-  'dismissive',
-]);
 
 function mapRowToRelationshipState(row: RelationshipStateRow): RelationshipState {
   return {
@@ -116,14 +96,6 @@ export class SupabaseRelationshipStateStore implements IRelationshipStateStore {
     const eventType = options.eventType || 'relationship_delta_applied';
     const payload = options.payload || {};
 
-    let modeParam: string | null = null;
-    if (options.mode) {
-      if (!VALID_MODES.has(options.mode)) {
-        throw new StoreValidationError(`Invalid relationship mode: "${options.mode}"`);
-      }
-      modeParam = DB_MODES.has(options.mode) ? options.mode : 'observing';
-    }
-
     const rpcParams = {
       p_user_id: userId,
       p_event_type: eventType,
@@ -134,7 +106,7 @@ export class SupabaseRelationshipStateStore implements IRelationshipStateStore {
       p_rivalry_delta: deltas.rivalryDelta ?? 0,
       p_familiarity_delta: deltas.familiarityDelta ?? 0,
       p_curiosity_delta: deltas.curiosityDelta ?? 0,
-      p_mode: modeParam,
+      p_mode: null,
     };
 
     const { data: eventId, error } = await this.client.rpc<string>(
@@ -161,36 +133,4 @@ export class SupabaseRelationshipStateStore implements IRelationshipStateStore {
     };
   }
 
-  /**
-   * Updates the relationship mode for a user.
-   */
-  async setMode(userId: string, mode: RelationshipMode): Promise<RelationshipState> {
-    if (!userId) {
-      throw new StoreValidationError('userId is required to set relationship mode.');
-    }
-    if (!VALID_MODES.has(mode)) {
-      throw new StoreValidationError(`Invalid relationship mode: "${mode}"`);
-    }
-
-    const dbMode = DB_MODES.has(mode) ? mode : 'observing';
-
-    const { data, error } = await this.client
-      .from<RelationshipStateRow>('relationship_state')
-      .update({
-        mode: dbMode,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('user_id', userId)
-      .select()
-      .single();
-
-    if (error || !data) {
-      throw new DatabaseError(
-        `Failed to update relationship mode for user ${userId}: ${error?.message || 'Unknown error'}`,
-        error?.code,
-      );
-    }
-
-    return mapRowToRelationshipState(data);
-  }
 }

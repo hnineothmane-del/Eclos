@@ -49,12 +49,12 @@ function getEnvVar(key: string): string {
 }
 
 /**
- * Creates a minimal, fetch-based SupabaseClientLike implementation
- * without external dependencies.
+ * Creates a minimal, fetch-based server-side SupabaseClientLike implementation
+ * without external dependencies. Write-capable stores require server credentials.
  */
 export function createSupabaseClient(config: SupabaseClientConfig = {}): SupabaseClientLike {
-  const url = config.supabaseUrl || getEnvVar('SUPABASE_URL') || getEnvVar('VITE_SUPABASE_URL') || '';
-  const key = config.supabaseKey || getEnvVar('SUPABASE_SERVICE_ROLE_KEY') || getEnvVar('SUPABASE_ANON_KEY') || getEnvVar('VITE_SUPABASE_ANON_KEY') || '';
+  const url = config.supabaseUrl || getEnvVar('SUPABASE_URL') || '';
+  const key = config.supabaseKey || getEnvVar('SUPABASE_SERVICE_ROLE_KEY') || '';
   const fetchFn = config.fetchFn || (typeof fetch !== 'undefined' ? fetch.bind(globalThis) : (null as unknown as typeof fetch));
 
   const cleanUrl = url.replace(/\/+$/, '');
@@ -213,8 +213,10 @@ export function createSupabaseClient(config: SupabaseClientConfig = {}): Supabas
         upsert(values, options) {
           method = 'POST';
           bodyData = values;
-          const onConflict = options?.onConflict ? `resolution=merge-duplicates,on_conflict=${options.onConflict}` : 'resolution=merge-duplicates';
-          headers['Prefer'] = `return=representation,${onConflict}`;
+          if (options?.onConflict) {
+            params.set('on_conflict', options.onConflict);
+          }
+          headers['Prefer'] = `return=representation,resolution=${options?.ignoreDuplicates ? 'ignore-duplicates' : 'merge-duplicates'}`;
           return createBuilder();
         },
         update(values) {

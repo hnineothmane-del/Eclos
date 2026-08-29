@@ -25,8 +25,11 @@ function createMockClient(): { client: SupabaseClientLike; mockQuery: any } {
       },
       error: null,
     }),
-    upsert: vi.fn().mockReturnThis(),
-    single: vi.fn().mockResolvedValue({
+  };
+
+  const client: SupabaseClientLike = {
+    from: vi.fn().mockReturnValue(mockQuery),
+    rpc: vi.fn().mockResolvedValue({
       data: {
         id: 'humor-1',
         user_id: 'user-abc',
@@ -39,11 +42,6 @@ function createMockClient(): { client: SupabaseClientLike; mockQuery: any } {
       },
       error: null,
     }),
-  };
-
-  const client: SupabaseClientLike = {
-    from: vi.fn().mockReturnValue(mockQuery),
-    rpc: vi.fn(),
   };
 
   return { client, mockQuery };
@@ -104,24 +102,52 @@ describe('SupabaseHumorStateStore', () => {
     expect(status.lastUsedAt).toBeNull();
   });
 
-  it('record upserts and increments usage count', async () => {
-    const { client, mockQuery } = createMockClient();
+  it('record delegates the increment to the authoritative atomic RPC', async () => {
+    const { client } = createMockClient();
     const store = new SupabaseHumorStateStore(client);
 
     const result = await store.record('user-abc', 'sarcasm', 'procrastination', 7);
 
-    expect(client.from).toHaveBeenCalledWith('humor_ledger');
-    expect(mockQuery.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        user_id: 'user-abc',
-        theme: 'sarcasm',
-        target: 'procrastination',
-        intensity: 7,
-        usage_count: 4,
-      }),
-      { onConflict: 'user_id,theme,target' },
-    );
+    expect(client.rpc).toHaveBeenCalledWith('record_humor_usage', {
+      p_user_id: 'user-abc',
+      p_theme: 'sarcasm',
+      p_target: 'procrastination',
+      p_intensity: 7,
+    });
     expect(result.usageCount).toBe(4);
+  });
+
+  it('preserves both concurrent increments through the atomic RPC', async () => {
+    let usageCount = 0;
+    const client: SupabaseClientLike = {
+      from: vi.fn(),
+      rpc: vi.fn(async () => {
+        usageCount += 1;
+        return {
+          data: {
+            id: 'humor-1',
+            user_id: 'user-abc',
+            theme: 'sarcasm',
+            target: 'procrastination',
+            intensity: 7,
+            usage_count: usageCount,
+            last_used_at: '2026-08-29T01:00:00.000Z',
+            created_at: '2026-08-28T00:00:00.000Z',
+          },
+          error: null,
+        };
+      }) as SupabaseClientLike['rpc'],
+    };
+    const store = new SupabaseHumorStateStore(client);
+
+    const results = await Promise.all([
+      store.record('user-abc', 'sarcasm', 'procrastination', 7),
+      store.record('user-abc', 'sarcasm', 'procrastination', 7),
+    ]);
+
+    expect(client.rpc).toHaveBeenCalledTimes(2);
+    expect(results.map((result) => result.usageCount).sort()).toEqual([1, 2]);
+    expect(usageCount).toBe(2);
   });
 
   it('throws StoreValidationError on invalid parameters', async () => {

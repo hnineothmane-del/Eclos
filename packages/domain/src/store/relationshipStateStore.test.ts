@@ -1,13 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SupabaseRelationshipStateStore } from './relationshipStateStore.js';
 import type { SupabaseClientLike } from './client.js';
-import { StoreValidationError, DatabaseError, NotFoundError } from './errors.js';
+import { StoreValidationError, DatabaseError } from './errors.js';
 
 function createMockClient(): { client: SupabaseClientLike; mockQuery: any } {
   const mockQuery: any = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
-    update: vi.fn().mockReturnThis(),
     maybeSingle: vi.fn().mockResolvedValue({
       data: {
         id: 'rel-1',
@@ -20,21 +19,6 @@ function createMockClient(): { client: SupabaseClientLike; mockQuery: any } {
         curiosity: 60,
         mode: 'sparring',
         updated_at: '2026-08-29T00:00:00.000Z',
-      },
-      error: null,
-    }),
-    single: vi.fn().mockResolvedValue({
-      data: {
-        id: 'rel-1',
-        user_id: 'user-abc',
-        respect: 65,
-        warmth: 40,
-        trust: 55,
-        rivalry: 70,
-        familiarity: 10,
-        curiosity: 60,
-        mode: 'mocking',
-        updated_at: '2026-08-29T00:05:00.000Z',
       },
       error: null,
     }),
@@ -116,29 +100,13 @@ describe('SupabaseRelationshipStateStore', () => {
     expect(result.state.respect).toBe(65);
   });
 
-  it('setMode validates and updates mode', async () => {
-    const { client, mockQuery } = createMockClient();
-    const store = new SupabaseRelationshipStateStore(client);
-
-    const updated = await store.setMode('user-abc', 'mocking');
-
-    expect(client.from).toHaveBeenCalledWith('relationship_state');
-    expect(mockQuery.update).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: 'mocking' }),
-    );
-    expect(updated.mode).toBe('mocking');
-  });
-
   it('throws StoreValidationError on invalid inputs', async () => {
     const { client } = createMockClient();
     const store = new SupabaseRelationshipStateStore(client);
 
     await expect(store.get('')).rejects.toThrow(StoreValidationError);
     await expect(store.applyDelta('', {})).rejects.toThrow(StoreValidationError);
-    await expect(store.setMode('', 'sparring')).rejects.toThrow(StoreValidationError);
-    await expect(store.setMode('user-abc', 'invalid_mode' as any)).rejects.toThrow(
-      StoreValidationError,
-    );
+    expect((store as any).setMode).toBeUndefined();
   });
 
   it('throws DatabaseError when RPC fails', async () => {
