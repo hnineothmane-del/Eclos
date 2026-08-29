@@ -1,0 +1,6 @@
+{
+  "imports": {
+    "@ai-rival/domain": "../../packages/domain/src/index.ts",
+    "@ai-rival/domain/": "../../packages/domain/src/"
+  }
+}

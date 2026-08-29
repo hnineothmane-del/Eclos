@@ -1,9 +1,13 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-// Supabase CLI bundles these local TypeScript modules with the function entrypoint.
-import { ResponsePlanner } from '../../../packages/domain/src/engine/responsePlanner.ts';
-import { DefaultModelRouter } from '../../../packages/domain/src/ai/router.ts';
-import { SupabaseRelationshipStateStore, SupabaseMemoryStore, SupabaseHumorStateStore } from '../../../packages/domain/src/store/index.ts';
+import { 
+  ResponsePlanner, 
+  DefaultModelRouter, 
+  SupabaseRelationshipStateStore, 
+  SupabaseMemoryStore, 
+  SupabaseHumorStateStore, 
+  SupabaseEventStore 
+} from '@ai-rival/domain';
 
 const corsHeaders = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
 const activeStatuses = ['accepted', 'started', 'attempted', 'evidence_submitted', 'needs_more_evidence'];
@@ -31,7 +35,9 @@ serve(async (req) => {
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
-    const geminiModel = Deno.env.get('GEMINI_MODEL') || 'gemini-2.5-flash';
+    const cheapModel = Deno.env.get('GEMINI_MODEL_CHEAP') || 'gemini-2.5-flash';
+    const strongModel = Deno.env.get('GEMINI_MODEL_STRONG') || 'gemini-2.5-pro';
+    const multimodalModel = Deno.env.get('GEMINI_MODEL_MULTIMODAL') || 'gemini-2.5-pro-vision';
     const authHeader = req.headers.get('Authorization');
     if (!supabaseUrl || !anonKey || !serviceRoleKey || !geminiApiKey || !authHeader) return json({ error: 'Unauthorized' }, 401);
 
@@ -41,8 +47,12 @@ serve(async (req) => {
     const body = await req.json();
     if (typeof body.userInput !== 'string' || !body.userInput.trim()) return json({ error: 'userInput is required' }, 400);
 
-    // The service-role client stays inside this Edge Function and performs trusted writes.
     const trustedClient = createClient(supabaseUrl, serviceRoleKey);
+    
+    // Ensure user state is initialized
+    await trustedClient.rpc('initialize_user_state', { p_user_id: user.id });
+
+    // The service-role client stays inside this Edge Function and performs trusted writes.
     const { data: usage, error: usageError } = await trustedClient.rpc('increment_usage_and_check', { p_user_id: user.id, p_interaction_delta: 1 });
     if (usageError) throw usageError;
     if (!usage?.allowed) return json({ error: 'Usage limit reached' }, 429);
@@ -51,15 +61,43 @@ serve(async (req) => {
       .from('challenges').select('*').eq('user_id', user.id).in('status', activeStatuses).order('updated_at', { ascending: false }).limit(1);
     if (challengeError) throw challengeError;
     const activeChallenge = challengeRows?.[0] ? mapChallenge(challengeRows[0]) : null;
-    const modelRouter = new DefaultModelRouter({ apiKey: geminiApiKey, cheapModel: geminiModel, strongModel: geminiModel, multimodalModel: geminiModel });
+    const modelRouter = new DefaultModelRouter({ apiKey: geminiApiKey, cheapModel, strongModel, multimodalModel });
     const dbClient = trustedClient as any;
     const planner = new ResponsePlanner({
       modelRouter,
       relationshipStore: new SupabaseRelationshipStateStore(dbClient),
       memoryStore: new SupabaseMemoryStore(dbClient),
       humorStore: new SupabaseHumorStateStore(dbClient),
+      eventStore: new SupabaseEventStore(dbClient),
     });
+    
     const aiResponse = await planner.planTurn({ userId: user.id, userInput: body.userInput, activeChallenge });
+
+    // Minimal deterministic bridge to support the first-session experience
+    if (aiResponse.eventSuggestions && !activeChallenge) {
+      for (const event of aiResponse.eventSuggestions) {
+        if (event.suggestedEventType === 'challenge_issued' || event.suggestedEventType === 'challenge_request') {
+          try {
+            const { ChallengeEngine } = await import('@ai-rival/domain');
+            const challengeEngine = new ChallengeEngine({
+              client: dbClient,
+              authenticatedUserId: user.id,
+              router: modelRouter
+            });
+            await challengeEngine.issue(user.id, {
+              userId: user.id,
+              domain: 'general',
+              objective: (event.suggestedPayload?.objective as string) || 'Prove it',
+              difficulty: 5
+            });
+            break;
+          } catch (e) {
+            console.error('Failed to bridge challenge issue:', e);
+          }
+        }
+      }
+    }
+
     return json({ response: aiResponse.response, intent: aiResponse.intent, mode: aiResponse.register, humorMechanism: aiResponse.humorMechanism });
   } catch (error) {
     console.error('chat-turn failed', error);
