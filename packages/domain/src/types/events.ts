@@ -18,7 +18,9 @@ export type EventType =
   | 'subscription_cancelled'
   | 'billing_webhook_processed'
   | 'usage_incremented'
-  | 'chat_message_sent';
+  | 'chat_message_sent'
+  | 'process_signal'
+  | 'process_thought';
 
 export interface DomainEvent<T = Record<string, unknown>> {
   id: string;

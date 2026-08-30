@@ -66,9 +66,10 @@ describe('ResponsePlanner', () => {
   it('loads process captures only from the event ledger and labels them unverified', async () => {
     const { planner, deps, generate } = setup({ response: 'roast', intent: 'x' });
     const mockEvents = [
-      { eventType: 'process_signal', payload: { challenge_id: 'ch1', signal: 'STUCK' }, createdAt: '2026-01-01T00:00:00Z' },
-      { eventType: 'process_thought', payload: { challenge_id: 'ch1', content: 'wait' }, createdAt: '2026-01-01T00:01:00Z' },
-      { eventType: 'process_signal', payload: { challenge_id: 'ch2', signal: 'GOT IT' }, createdAt: '2026-01-01T00:02:00Z' } // Different challenge
+      { id: '1', eventType: 'challenge_started', payload: { challenge_id: 'ch1' }, createdAt: '2026-01-01T00:00:00Z', source: 'system' },
+      { id: '2', eventType: 'process_signal', payload: { challenge_id: 'ch1', signal: 'STUCK' }, createdAt: '2026-01-01T00:01:00Z', source: 'user_action' },
+      { id: '3', eventType: 'process_thought', payload: { challenge_id: 'ch1', content: 'wait' }, createdAt: '2026-01-01T00:02:00Z', source: 'user_action' },
+      { id: '4', eventType: 'process_signal', payload: { challenge_id: 'ch2', signal: 'GOT IT' }, createdAt: '2026-01-01T00:03:00Z', source: 'user_action' } // Different challenge
     ];
     deps.eventStore = {
       recentForUser: vi.fn().mockResolvedValue(mockEvents)
@@ -83,8 +84,10 @@ describe('ResponsePlanner', () => {
     expect(promptCall).toContain('RIVAL LENS — PROCESS CAPTURES');
     expect(promptCall).toContain('[SIGNAL] USER-PROVIDED, UNVERIFIED: STUCK');
     expect(promptCall).toContain('[THOUGHT] "USER-PROVIDED, UNVERIFIED: wait"');
+    // Insights should be derived
+    expect(promptCall).toContain('GROUNDED PROCESS INSIGHTS');
+    expect(promptCall).toContain('User had a 60-second initiation delay.'); // delay from start to stuck (wait, there's no challenge_started event, so no delay insight generated in this test. Let's add it)
     expect(promptCall).not.toContain('fabricated history');
-    // Should filter out the one for ch2
     expect(promptCall).not.toContain('[SIGNAL] USER-PROVIDED, UNVERIFIED: GOT IT');
   });
 });

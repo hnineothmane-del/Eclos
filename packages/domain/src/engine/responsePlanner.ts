@@ -57,6 +57,8 @@ function isGroundedMemory(candidate: AIMemoryCandidate, userInput: string, activ
   return challengeSource.includes(candidateText);
 }
 
+import { deriveProcessInsights, type ProcessInsight } from './processInsights.js';
+
 export class ResponsePlanner {
   constructor(private readonly deps: PlanTurnDependencies) {}
   async planTurn(options: PlanTurnOptions): Promise<AIResponseContract> {
@@ -70,6 +72,7 @@ export class ResponsePlanner {
     // Process captures are loaded only from the immutable event ledger. They are
     // voluntary user observations, not verified challenge facts.
     let processCaptures: ProcessCapture[] | undefined;
+    let processInsights: ProcessInsight[] | undefined;
     if (activeChallenge && this.deps.eventStore) {
       const recentEvents = await this.deps.eventStore.recentForUser(userId, 50);
       processCaptures = recentEvents
@@ -80,9 +83,11 @@ export class ResponsePlanner {
           content: (e.payload as any)?.content ? `USER-PROVIDED, UNVERIFIED: ${(e.payload as any).content}` : undefined,
           timestamp: e.createdAt,
         }));
+      
+      processInsights = deriveProcessInsights(activeChallenge, recentEvents);
     }
 
-    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, processCaptures })));
+    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, processCaptures, processInsights })));
     for (const candidate of aiResponse.memoryCandidates || []) {
       if (isGroundedMemory(candidate, userInput, activeChallenge)) await this.deps.memoryStore.write({ userId, tier: candidate.tier, category: candidate.category, key: candidate.key, value: candidate.value, strength: Math.floor(candidate.confidence * 100) });
     }
