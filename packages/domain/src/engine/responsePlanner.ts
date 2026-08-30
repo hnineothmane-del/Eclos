@@ -22,7 +22,7 @@ export interface ProcessCapture {
   timestamp: string;
 }
 
-export interface PlanTurnOptions { userId: string; userInput: string; activeChallenge?: Challenge | null; processCaptures?: ProcessCapture[]; }
+export interface PlanTurnOptions { userId: string; userInput: string; activeChallenge?: Challenge | null; }
 export interface PlanTurnDependencies { modelRouter: ModelRouter; relationshipStore: IRelationshipStateStore; memoryStore: IMemoryStore; humorStore: IHumorStateStore; eventStore?: import('../store/index.js').IEventStore; }
 
 
@@ -67,16 +67,17 @@ export class ResponsePlanner {
     const recentHumor = await this.deps.humorStore.recentMechanisms(userId);
     const decision = selectTurnDecision(userInput, relationship, activeChallenge, memories, recentHumor);
 
-    // Fetch process captures directly from DB
-    let processCaptures = options.processCaptures;
-    if (!processCaptures && activeChallenge && this.deps.eventStore) {
+    // Process captures are loaded only from the immutable event ledger. They are
+    // voluntary user observations, not verified challenge facts.
+    let processCaptures: ProcessCapture[] | undefined;
+    if (activeChallenge && this.deps.eventStore) {
       const recentEvents = await this.deps.eventStore.recentForUser(userId, 50);
       processCaptures = recentEvents
-        .filter(e => (e.eventType === 'process_signal' || e.eventType === 'process_thought') && (e.payload as any)?.challenge_id === activeChallenge.id)
+        .filter(e => ((e.eventType as string) === 'process_signal' || (e.eventType as string) === 'process_thought') && (e.payload as any)?.challenge_id === activeChallenge.id)
         .map(e => ({
           captureType: e.eventType as 'process_signal' | 'process_thought',
-          signal: (e.payload as any)?.signal,
-          content: (e.payload as any)?.content,
+          signal: (e.payload as any)?.signal ? `USER-PROVIDED, UNVERIFIED: ${(e.payload as any).signal}` : undefined,
+          content: (e.payload as any)?.content ? `USER-PROVIDED, UNVERIFIED: ${(e.payload as any).content}` : undefined,
           timestamp: e.createdAt,
         }));
     }
@@ -90,4 +91,3 @@ export class ResponsePlanner {
     return { ...aiResponse, humorMechanism: decision.humorMechanism, register: decision.register, seriousFlag: decision.serious };
   }
 }
-

@@ -20,6 +20,7 @@ export interface RivalLensProps {
 export const RivalLens: React.FC<RivalLensProps> = ({ challengeId, profile, onCapture }) => {
   const [thought, setThought] = useState('');
   const [recentSignal, setRecentSignal] = useState<string | null>(null);
+  const [captureError, setCaptureError] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const exampleRef = useRef(Math.floor(Math.random() * EXAMPLE_THOUGHTS.length));
 
@@ -34,7 +35,9 @@ export const RivalLens: React.FC<RivalLensProps> = ({ challengeId, profile, onCa
     };
     onCapture?.(capture);
     // Fire-and-forget: no AI call triggered
-    recordProcessCapture(challengeId, 'process_signal', { signal }).catch(() => {});
+    void recordProcessCapture(challengeId, 'process_signal', { signal })
+      .then(() => setCaptureError(false))
+      .catch(() => setCaptureError(true));
     setTimeout(() => setRecentSignal(null), 2000);
   };
 
@@ -47,7 +50,9 @@ export const RivalLens: React.FC<RivalLensProps> = ({ challengeId, profile, onCa
       timestamp: new Date().toISOString(),
     };
     onCapture?.(capture);
-    recordProcessCapture(challengeId, 'process_thought', { content: text }).catch(() => {});
+    void recordProcessCapture(challengeId, 'process_thought', { content: text })
+      .then(() => setCaptureError(false))
+      .catch(() => setCaptureError(true));
     setThought('');
   };
 
@@ -104,6 +109,11 @@ export const RivalLens: React.FC<RivalLensProps> = ({ challengeId, profile, onCa
           {recentSignal && (
             <p className="lens-sent" role="status" aria-live="assertive">
               Sent: {recentSignal}
+            </p>
+          )}
+          {captureError && (
+            <p className="lens-error" role="status">
+              Couldn&apos;t save that capture. You can keep working.
             </p>
           )}
         </div>

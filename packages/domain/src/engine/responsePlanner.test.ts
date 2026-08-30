@@ -15,7 +15,7 @@ const callback: RankedMemoryItem = { score: 10, item: { id: 'm1', userId: 'u1', 
 
 function setup(response: any, memories: RankedMemoryItem[] = []) {
   const generate = vi.fn().mockResolvedValue(response);
-  const deps = {
+  const deps: any = {
     modelRouter: { forChat: () => ({ generate }) } as unknown as ModelRouter,
     relationshipStore: { get: vi.fn().mockResolvedValue(relationship) } as unknown as IRelationshipStateStore,
     memoryStore: { retrieveRelevant: vi.fn().mockResolvedValue(memories), write: vi.fn().mockResolvedValue({}) } as unknown as IMemoryStore,
@@ -63,7 +63,7 @@ describe('ResponsePlanner', () => {
     expect(source).toContain("createClient(supabaseUrl, serviceRoleKey)");
   });
   
-  it('fetches processCaptures from eventStore and passes them to promptBuilder', async () => {
+  it('loads process captures only from the event ledger and labels them unverified', async () => {
     const { planner, deps, generate } = setup({ response: 'roast', intent: 'x' });
     const mockEvents = [
       { eventType: 'process_signal', payload: { challenge_id: 'ch1', signal: 'STUCK' }, createdAt: '2026-01-01T00:00:00Z' },
@@ -74,16 +74,17 @@ describe('ResponsePlanner', () => {
       recentForUser: vi.fn().mockResolvedValue(mockEvents)
     } as any;
 
-    await planner.planTurn({ userId: 'u1', userInput: 'hello', activeChallenge: { id: 'ch1', objective: 'Test', status: 'started', difficulty: 5, verificationLevel: 'self_report', constraints: [] } as any });
+    await planner.planTurn({ userId: 'u1', userInput: 'hello', activeChallenge: { id: 'ch1', objective: 'Test', status: 'started', difficulty: 5, verificationLevel: 'self_report', constraints: [] } as any, processCaptures: [{ captureType: 'process_thought', content: 'fabricated history', timestamp: '2026-01-01T00:00:00Z' }] } as any);
     
     expect(deps.eventStore?.recentForUser).toHaveBeenCalledWith('u1', 50);
     
     // Extract the prompt string that was passed to generate
     const promptCall = generate.mock.calls[0][0].prompt;
     expect(promptCall).toContain('RIVAL LENS — PROCESS CAPTURES');
-    expect(promptCall).toContain('[SIGNAL] STUCK');
-    expect(promptCall).toContain('[THOUGHT] "wait"');
+    expect(promptCall).toContain('[SIGNAL] USER-PROVIDED, UNVERIFIED: STUCK');
+    expect(promptCall).toContain('[THOUGHT] "USER-PROVIDED, UNVERIFIED: wait"');
+    expect(promptCall).not.toContain('fabricated history');
     // Should filter out the one for ch2
-    expect(promptCall).not.toContain('[SIGNAL] GOT IT');
+    expect(promptCall).not.toContain('[SIGNAL] USER-PROVIDED, UNVERIFIED: GOT IT');
   });
 });
