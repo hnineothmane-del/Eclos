@@ -71,7 +71,11 @@ serve(async (req) => {
       eventStore: new SupabaseEventStore(dbClient),
     });
     
-    const aiResponse = await planner.planTurn({ userId: user.id, userInput: body.userInput, activeChallenge });
+    const aiResponse = await planner.planTurn({ 
+      userId: user.id, 
+      userInput: body.userInput, 
+      activeChallenge
+    });
 
     // Minimal deterministic bridge to support the first-session experience
     if (aiResponse.eventSuggestions && !activeChallenge) {

@@ -14,8 +14,17 @@ const MEMORY_CATEGORIES = new Set(['goal', 'achievement', 'failure', 'commitment
 export type ResponseMode = typeof RESPONSE_MODES[number];
 export type HumorMechanism = typeof HUMOR_MECHANISMS[number];
 export interface TurnDecision { mode: ResponseMode; humorMechanism: HumorMechanism | null; target: string; callback: RankedMemoryItem | null; serious: boolean; register: string; intensity: number; }
-export interface PlanTurnOptions { userId: string; userInput: string; activeChallenge?: Challenge | null; }
-export interface PlanTurnDependencies { modelRouter: ModelRouter; relationshipStore: IRelationshipStateStore; memoryStore: IMemoryStore; humorStore: IHumorStateStore; }
+
+export interface ProcessCapture {
+  captureType: 'process_signal' | 'process_thought';
+  signal?: string;
+  content?: string;
+  timestamp: string;
+}
+
+export interface PlanTurnOptions { userId: string; userInput: string; activeChallenge?: Challenge | null; processCaptures?: ProcessCapture[]; }
+export interface PlanTurnDependencies { modelRouter: ModelRouter; relationshipStore: IRelationshipStateStore; memoryStore: IMemoryStore; humorStore: IHumorStateStore; eventStore?: import('../store/index.js').IEventStore; }
+
 
 function hasAny(input: string, terms: readonly string[]): boolean { return terms.some((term) => input.includes(term)); }
 function chooseMechanism(preferred: readonly HumorMechanism[], recent: readonly string[]): HumorMechanism | null { return preferred.find((mechanism) => !recent.includes(mechanism)) || null; }
@@ -57,7 +66,22 @@ export class ResponsePlanner {
     const memories = await this.deps.memoryStore.retrieveRelevant(userId, { tags: [userInput], topK: 3 });
     const recentHumor = await this.deps.humorStore.recentMechanisms(userId);
     const decision = selectTurnDecision(userInput, relationship, activeChallenge, memories, recentHumor);
-    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision })));
+
+    // Fetch process captures directly from DB
+    let processCaptures = options.processCaptures;
+    if (!processCaptures && activeChallenge && this.deps.eventStore) {
+      const recentEvents = await this.deps.eventStore.recentForUser(userId, 50);
+      processCaptures = recentEvents
+        .filter(e => (e.eventType === 'process_signal' || e.eventType === 'process_thought') && (e.payload as any)?.challenge_id === activeChallenge.id)
+        .map(e => ({
+          captureType: e.eventType as 'process_signal' | 'process_thought',
+          signal: (e.payload as any)?.signal,
+          content: (e.payload as any)?.content,
+          timestamp: e.createdAt,
+        }));
+    }
+
+    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, processCaptures })));
     for (const candidate of aiResponse.memoryCandidates || []) {
       if (isGroundedMemory(candidate, userInput, activeChallenge)) await this.deps.memoryStore.write({ userId, tier: candidate.tier, category: candidate.category, key: candidate.key, value: candidate.value, strength: Math.floor(candidate.confidence * 100) });
     }
@@ -66,3 +90,4 @@ export class ResponsePlanner {
     return { ...aiResponse, humorMechanism: decision.humorMechanism, register: decision.register, seriousFlag: decision.serious };
   }
 }
+

@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { ProductIdentity } from '../config/identity';
 import { chatTurn, ensureSession, acceptChallenge, declineChallenge, submitEvidence, checkJudgment } from '../lib/api';
 import { supabase } from '../lib/supabase';
+import { RivalLens } from '../components/RivalLens';
+import { getCaptureProfile } from '../lib/captureProfile';
 import '../styles/home.css';
 
 type FlowState = 
@@ -199,6 +201,11 @@ export const HomePage: React.FC = () => {
             <h3>ACTIVE CHALLENGE</h3>
             <p className="objective">{activeChallenge.title}</p>
             <p className="hint">You can tell me you're done. Proof is different.</p>
+
+            <RivalLens
+              challengeId={activeChallenge.id}
+              profile={getCaptureProfile(activeChallenge.parameters?.domain || 'general')}
+            />
             
             <textarea 
               className="proof-input" 

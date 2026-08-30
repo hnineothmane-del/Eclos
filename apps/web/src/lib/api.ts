@@ -79,3 +79,16 @@ export async function checkJudgment(challengeId: string) {
   if (error) throw error;
   return data;
 }
+
+export async function recordProcessCapture(challengeId: string, captureType: 'process_signal' | 'process_thought', opts: { signal?: string; content?: string } = {}) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return;
+  await supabase.rpc('record_process_capture', {
+    p_user_id: user.id,
+    p_challenge_id: challengeId,
+    p_capture_type: captureType,
+    p_content: opts.content ?? null,
+    p_signal: opts.signal ?? null,
+    p_artifact_reference: null,
+  });
+}

@@ -62,4 +62,28 @@ describe('ResponsePlanner', () => {
     expect(source.indexOf("rpc('increment_usage_and_check'")).toBeLessThan(source.indexOf('planner.planTurn'));
     expect(source).toContain("createClient(supabaseUrl, serviceRoleKey)");
   });
+  
+  it('fetches processCaptures from eventStore and passes them to promptBuilder', async () => {
+    const { planner, deps, generate } = setup({ response: 'roast', intent: 'x' });
+    const mockEvents = [
+      { eventType: 'process_signal', payload: { challenge_id: 'ch1', signal: 'STUCK' }, createdAt: '2026-01-01T00:00:00Z' },
+      { eventType: 'process_thought', payload: { challenge_id: 'ch1', content: 'wait' }, createdAt: '2026-01-01T00:01:00Z' },
+      { eventType: 'process_signal', payload: { challenge_id: 'ch2', signal: 'GOT IT' }, createdAt: '2026-01-01T00:02:00Z' } // Different challenge
+    ];
+    deps.eventStore = {
+      recentForUser: vi.fn().mockResolvedValue(mockEvents)
+    } as any;
+
+    await planner.planTurn({ userId: 'u1', userInput: 'hello', activeChallenge: { id: 'ch1', objective: 'Test', status: 'started', difficulty: 5, verificationLevel: 'self_report', constraints: [] } as any });
+    
+    expect(deps.eventStore?.recentForUser).toHaveBeenCalledWith('u1', 50);
+    
+    // Extract the prompt string that was passed to generate
+    const promptCall = generate.mock.calls[0][0].prompt;
+    expect(promptCall).toContain('RIVAL LENS — PROCESS CAPTURES');
+    expect(promptCall).toContain('[SIGNAL] STUCK');
+    expect(promptCall).toContain('[THOUGHT] "wait"');
+    // Should filter out the one for ch2
+    expect(promptCall).not.toContain('[SIGNAL] GOT IT');
+  });
 });
