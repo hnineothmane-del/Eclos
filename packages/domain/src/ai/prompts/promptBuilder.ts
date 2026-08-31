@@ -9,8 +9,9 @@ import type { CharacterPlan } from '../../engine/characterDirector.js';
 import type { ChallengeSelection } from '../../challenge/challengeSelector.js';
 import type { PresenceDecision } from '../../engine/presenceEngine.js';
 import type { SelectedMemory } from '../../engine/rivalMemorySelector.js';
+import type { SelectedInsight } from '../../engine/rivalInsightSelector.js';
 
-export interface BuildPromptContext { userInput: string; relationship: RelationshipState; activeChallenge?: Challenge | null; decision?: TurnDecision; characterPlan?: CharacterPlan; challengeSelection?: ChallengeSelection | null; presenceDecision?: PresenceDecision | null; memories?: RankedMemoryItem[]; recentHumor?: string[]; processCaptures?: ProcessCapture[]; processInsights?: ProcessInsight[]; selectedRivalMemory?: SelectedMemory | null; }
+export interface BuildPromptContext { userInput: string; relationship: RelationshipState; activeChallenge?: Challenge | null; decision?: TurnDecision; characterPlan?: CharacterPlan; challengeSelection?: ChallengeSelection | null; presenceDecision?: PresenceDecision | null; memories?: RankedMemoryItem[]; recentHumor?: string[]; processCaptures?: ProcessCapture[]; processInsights?: ProcessInsight[]; selectedRivalMemory?: SelectedMemory | null; selectedInsight?: SelectedInsight | null; }
 
 export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptions {
   const decision = context.decision || { mode: 'banter', humorMechanism: null, target: 'current behavior', callback: null, serious: false, register: 'direct', intensity: 4 } as TurnDecision;
@@ -45,6 +46,15 @@ export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptio
     }
     prompt += `- Reason selected: ${context.selectedRivalMemory.reason}\n`;
     prompt += `You MAY reference this memory naturally. Do NOT force it. Do NOT invent facts beyond what is stated. Do NOT treat ${mem.epistemicStatus === 'hypothesis' ? 'this hypothesis as an established fact' : 'this as a character judgment'}.\n\n`;
+  }
+  if (context.selectedInsight) {
+    const ins = context.selectedInsight.insight;
+    prompt += `GROUNDED RIVAL INSIGHT (Deterministically selected — authority: ${ins.epistemicStatus}):\n`;
+    prompt += `- [${ins.family.toUpperCase()}] ${ins.description}\n`;
+    prompt += `- Evidence count: ${ins.evidenceCount} observations | Confidence: ${Math.round(ins.confidence * 100)}%\n`;
+    prompt += `- Temporal pattern: ${ins.temporalPattern} (first observed: ${ins.firstObservedAt.split('T')[0]}, last: ${ins.lastObservedAt.split('T')[0]})\n`;
+    prompt += `- Reason selected: ${context.selectedInsight.reason}\n`;
+    prompt += `You MAY weave this into the response naturally. Do NOT state it as a diagnosis or psychiatric condition. Do NOT fabricate evidence beyond what is stated. Do NOT treat hypothesis as established fact. Do NOT be overly literal or spammy.\n\n`;
   }
   if (context.characterPlan) {
     const plan = context.characterPlan;

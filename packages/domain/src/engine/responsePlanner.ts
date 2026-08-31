@@ -12,6 +12,8 @@ import type { PresenceDecision } from './presenceEngine.js';
 import { inferChallengeDomain, selectChallengePrimitive, type ChallengeOutcome, type ChallengePrimitive, type ChallengeSelection } from '../challenge/challengeSelector.js';
 import { deriveRivalMemories, type RivalMemory } from './rivalMemory.js';
 import { selectRivalMemory, type SelectedMemory } from './rivalMemorySelector.js';
+import { deriveRivalInsights, type RivalInsight } from './rivalInsights.js';
+import { selectRivalInsight, type SelectedInsight } from './rivalInsightSelector.js';
 
 const RESPONSE_MODES = ['roast', 'observational_roast', 'challenge', 'judgment', 'grudging_praise', 'serious', 'supportive', 'banter', 'bored', 'curious', 'help', 'meta_rejection'] as const;
 const HUMOR_MECHANISMS = ['deadpan', 'mock_formal', 'absurd_escalation', 'observational', 'contextual_roast', 'callback', 'running_joke', 'irony', 'sarcasm', 'wit', 'nonsense', 'anti_climax', 'self_aware', 'self_deprecation', 'unexpected_praise', 'strategic_silence'] as const;
@@ -173,6 +175,37 @@ export class ResponsePlanner {
       });
     }
 
+    // ── Rival Insight derivation (pure, deterministic, zero AI calls) ──────────
+    let selectedInsight: SelectedInsight | null = null;
+    {
+      const allEvents = (this.deps.eventStore)
+        ? await this.deps.eventStore.recentForUser(userId, 200) // need a longer history for insights
+        : [];
+      
+      const derivedInsights = deriveRivalInsights({
+        allEvents,
+        rivalMemories,
+        processInsights: processInsights || [],
+        nowIso: new Date().toISOString(),
+        userId,
+      });
+
+      const isSeriousContext = characterPlan.state.seriousness >= 7;
+      const isChallengeCritical = activeChallenge?.status === 'evidence_submitted' || activeChallenge?.status === 'needs_more_evidence';
+      const normalizedChallenge: Challenge | null = activeChallenge ?? null;
+
+      selectedInsight = selectRivalInsight({
+        insights: derivedInsights,
+        userInput,
+        relationship,
+        activeChallenge: normalizedChallenge,
+        isSeriousContext,
+        isChallengeCritical,
+        recentlySurfacedInsightKeys: [],
+        nowIso: new Date().toISOString(),
+      });
+    }
+
     let recentPrimitives: ChallengePrimitive[] = [];
     let recentOutcomes: ChallengeOutcome[] = [];
     let firstSession = !activeChallenge;
@@ -204,7 +237,7 @@ export class ResponsePlanner {
       : null;
     const decision = decisionFromCharacterPlan(characterPlan, relationship, memories);
 
-    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, characterPlan, challengeSelection, presenceDecision, processCaptures, processInsights, selectedRivalMemory })));
+    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, characterPlan, challengeSelection, presenceDecision, processCaptures, processInsights, selectedRivalMemory, selectedInsight })));
     for (const candidate of aiResponse.memoryCandidates || []) {
       if (isGroundedMemory(candidate, userInput, activeChallenge)) await this.deps.memoryStore.write({ userId, tier: candidate.tier, category: candidate.category, key: candidate.key, value: candidate.value, strength: Math.floor(candidate.confidence * 100) });
     }

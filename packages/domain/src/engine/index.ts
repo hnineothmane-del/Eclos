@@ -5,6 +5,8 @@ export * from './characterDirector.js';
 export * from './presenceEngine.js';
 export * from './rivalMemory.js';
 export * from './rivalMemorySelector.js';
+export * from './rivalInsights.js';
+export * from './rivalInsightSelector.js';
 
 /** @deprecated Placeholder — will be removed once all consumers are updated */
 export const ENGINE_MODULE = 'engine';
