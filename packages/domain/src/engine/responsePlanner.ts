@@ -14,6 +14,7 @@ import { deriveRivalMemories, type RivalMemory } from './rivalMemory.js';
 import { selectRivalMemory, type SelectedMemory } from './rivalMemorySelector.js';
 import { deriveRivalInsights, type RivalInsight } from './rivalInsights.js';
 import { selectRivalInsight, type SelectedInsight } from './rivalInsightSelector.js';
+import { deriveAgencyDecision, type RivalInitiativeDecision } from './rivalAgency.js';
 
 const RESPONSE_MODES = ['roast', 'observational_roast', 'challenge', 'judgment', 'grudging_praise', 'serious', 'supportive', 'banter', 'bored', 'curious', 'help', 'meta_rejection'] as const;
 const HUMOR_MECHANISMS = ['deadpan', 'mock_formal', 'absurd_escalation', 'observational', 'contextual_roast', 'callback', 'running_joke', 'irony', 'sarcasm', 'wit', 'nonsense', 'anti_climax', 'self_aware', 'self_deprecation', 'unexpected_praise', 'strategic_silence'] as const;
@@ -74,7 +75,7 @@ export class ResponsePlanner {
     if (!options.presenceDecision.action) return null;
     return this.planTurn({ userId: options.userId, userInput: '', activeChallenge: options.activeChallenge, presenceDecision: options.presenceDecision });
   }
-  async planTurn(options: PlanTurnOptions): Promise<PlannedResponse> {
+  async planTurn(options: PlanTurnOptions): Promise<PlannedResponse | null> {
     const { userId, userInput, activeChallenge, presenceDecision } = options;
     const relationship = await this.deps.relationshipStore.get(userId);
     if (!relationship) throw new Error('Relationship state not found for user');
@@ -221,6 +222,28 @@ export class ResponsePlanner {
         .map((event) => (event.payload as { verdict?: unknown }).verdict)
         .filter((outcome): outcome is ChallengeOutcome => outcome === 'passed' || outcome === 'failed' || outcome === 'needs_more_evidence');
     }
+    const agencyDecision = deriveAgencyDecision({
+      allEvents: this.deps.eventStore ? await this.deps.eventStore.recentForUser(userId, 200) : [],
+      userInput,
+      activeChallenge: activeChallenge ?? null,
+      presence: presenceDecision ?? { state: 'active', activity: 'watching', attention: 'ignore', action: null, reason: 'no_worthy_event', sourceEventIds: [], generatedAt: new Date().toISOString() },
+      relationship,
+      characterPlan,
+      selectedMemory: selectedRivalMemory,
+      selectedInsight,
+      processInsights: processInsights || [],
+      recentInitiatives: this.deps.eventStore ? await this.deps.eventStore.recentForUser(userId, 200) : [],
+      nowIso: new Date().toISOString(),
+    });
+
+    if (!userInput && agencyDecision.action === 'QUIET') {
+      return null;
+    }
+
+    if (agencyDecision.requestedInteractionMode) {
+      characterPlan.interactionMode = agencyDecision.requestedInteractionMode;
+    }
+
     const challengeSelection = characterPlan.interactionMode === 'challenge_invitation'
       ? selectChallengePrimitive({
           objective: userInput,
@@ -237,11 +260,22 @@ export class ResponsePlanner {
       : null;
     const decision = decisionFromCharacterPlan(characterPlan, relationship, memories);
 
-    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, characterPlan, challengeSelection, presenceDecision, processCaptures, processInsights, selectedRivalMemory, selectedInsight })));
+    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, characterPlan, challengeSelection, presenceDecision, processCaptures, processInsights, selectedRivalMemory, selectedInsight, agencyDecision })));
     for (const candidate of aiResponse.memoryCandidates || []) {
       if (isGroundedMemory(candidate, userInput, activeChallenge)) await this.deps.memoryStore.write({ userId, tier: candidate.tier, category: candidate.category, key: candidate.key, value: candidate.value, strength: Math.floor(candidate.confidence * 100) });
     }
     if (decision.humorMechanism && HUMOR_MECHANISMS.includes(decision.humorMechanism)) await this.deps.humorStore.record(userId, decision.humorMechanism, decision.target, decision.intensity);
+    if (agencyDecision.action !== 'QUIET' && this.deps.eventStore) {
+      await this.deps.eventStore.append({
+        userId,
+        eventType: 'agency_initiative',
+        source: 'system',
+        payload: {
+          category: agencyDecision.action,
+          reason: agencyDecision.reason,
+        }
+      });
+    }
     // Event suggestions are advisory only and deliberately have no generic persistence path.
     return { ...aiResponse, humorMechanism: decision.humorMechanism, register: decision.register, seriousFlag: decision.serious, challengeSelection };
   }

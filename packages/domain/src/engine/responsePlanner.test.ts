@@ -40,13 +40,22 @@ describe('ResponsePlanner', () => {
   it('uses exactly one generation call and records the planner-selected mechanism only', async () => {
     const { planner, deps, generate } = setup({ response: 'roast', intent: 'x', humorMechanism: 'invented', seriousFlag: false }, [callback]);
     const result = await planner.planTurn({ userId: 'u1', userInput: 'I am back again' });
-    expect(generate).toHaveBeenCalledTimes(1); expect(result.humorMechanism).toBe('callback');
+    expect(generate).toHaveBeenCalledTimes(1); expect(result!.humorMechanism).toBe('callback');
     expect((deps.humorStore.record as any)).toHaveBeenCalledWith('u1', 'callback', expect.any(String), 8);
+    expect(generate.mock.calls[0][0].prompt).toContain('DETERMINISTIC CHARACTER DIRECTION');
+    expect(generate.mock.calls[0][0].prompt).toContain('Interaction shape: callback');
   });
   it('does not record humor when the planner selects serious mode', async () => {
     const { planner, deps } = setup({ response: 'I am here.', intent: 'support', humorMechanism: 'sarcasm', seriousFlag: false });
     await planner.planTurn({ userId: 'u1', userInput: 'I want to die' });
     expect((deps.humorStore.record as any)).not.toHaveBeenCalled();
+  });
+  it('selects a deterministic primitive only for a goal-shaped challenge invitation', async () => {
+    const { planner, generate } = setup({ response: 'Fine. Prove it.', intent: 'challenge' });
+    const result = await planner.planTurn({ userId: 'u1', userInput: 'I want to get better at coding' });
+    expect(result!.challengeSelection).toMatchObject({ primitive: 'micro_test', domain: 'coding', difficulty: 3 });
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate.mock.calls[0][0].prompt).toContain('DETERMINISTIC CHALLENGE SHAPE');
   });
   it('rejects fabricated events and ungrounded memory candidates', async () => {
     const { planner, deps } = setup({ response: 'ok', intent: 'x', eventSuggestions: [{ suggestedEventType: 'challenge_judged', suggestedPayload: {}, confidence: 1 }], memoryCandidates: [{ tier: 'permanent', category: 'observation', key: 'invented', value: 'the user always lies', confidence: 1 }] });

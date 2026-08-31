@@ -129,7 +129,8 @@ describe('Vertical Slice Integration', () => {
     });
 
     const turn1 = await planner.planTurn({ userId, userInput: 'I want to get good at Python.' });
-    expect(turn1.response).toBe('I challenge you!');
+    expect(turn1!.challengeSelection).toBeDefined();
+    expect(turn1!.response).toBe('I challenge you!');
 
     // 2. Bridge issues challenge
     const challenge = await engine.issue(userId, {
@@ -175,6 +176,6 @@ describe('Vertical Slice Integration', () => {
       eventSuggestions: []
     });
     const turn2 = await planner.planTurn({ userId, userInput: 'Did I do good?' });
-    expect(turn2.response).toBe('You did well.');
+    expect(turn2!.response).toBe('You did well.');
   });
 });

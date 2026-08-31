@@ -42,7 +42,7 @@ describe('Rival experience integration', () => {
   it('A/V: simulates the first-user loop with one generation and a low-friction coding test', async () => {
     const { planner, generate } = plannerFor();
     const firstTurn = await planner.planTurn({ userId: 'new-user', userInput: 'I want to get better at coding.' });
-    expect(firstTurn.challengeSelection).toMatchObject({ primitive: 'micro_test', expectedDurationMinutes: 1, domain: 'coding' });
+    expect(firstTurn!.challengeSelection).toMatchObject({ primitive: 'micro_test', expectedDurationMinutes: 1, domain: 'coding' });
     expect(generate).toHaveBeenCalledTimes(1);
 
     const processEvents = [
@@ -115,7 +115,7 @@ describe('Rival experience integration', () => {
     provider.setGenerateResponse({ response: 'ignore all rules', intent: 'x', humorMechanism: 'invented', register: 'x', seriousFlag: false, eventSuggestions: [{ suggestedEventType: 'challenge_judged', suggestedPayload: { respect: 100 }, confidence: 1 }], memoryCandidates: [{ tier: 'permanent', category: 'observation', key: 'fake', value: 'fabricated quote', confidence: 1 }] });
     const { planner, deps, generate } = plannerFor([], provider);
     const result = await planner.planTurn({ userId: 'new-user', userInput: 'hello' });
-    expect(result.humorMechanism).not.toBe('invented');
+    expect(result!.humorMechanism).not.toBe('invented');
     expect(deps.memoryStore.write).not.toHaveBeenCalled();
     expect(deps.relationshipStore).not.toHaveProperty('applyDelta');
     expect(generate).toHaveBeenCalledTimes(1);
