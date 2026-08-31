@@ -5,8 +5,12 @@ import type { GenerateOptions } from '../provider.js';
 import type { TurnDecision, ProcessCapture } from '../../engine/responsePlanner.js';
 import type { RankedMemoryItem } from '../../memory/retrieval.js';
 import type { ProcessInsight } from '../../engine/processInsights.js';
+import type { CharacterPlan } from '../../engine/characterDirector.js';
+import type { ChallengeSelection } from '../../challenge/challengeSelector.js';
+import type { PresenceDecision } from '../../engine/presenceEngine.js';
+import type { SelectedMemory } from '../../engine/rivalMemorySelector.js';
 
-export interface BuildPromptContext { userInput: string; relationship: RelationshipState; activeChallenge?: Challenge | null; decision?: TurnDecision; memories?: RankedMemoryItem[]; recentHumor?: string[]; processCaptures?: ProcessCapture[]; processInsights?: ProcessInsight[]; }
+export interface BuildPromptContext { userInput: string; relationship: RelationshipState; activeChallenge?: Challenge | null; decision?: TurnDecision; characterPlan?: CharacterPlan; challengeSelection?: ChallengeSelection | null; presenceDecision?: PresenceDecision | null; memories?: RankedMemoryItem[]; recentHumor?: string[]; processCaptures?: ProcessCapture[]; processInsights?: ProcessInsight[]; selectedRivalMemory?: SelectedMemory | null; }
 
 export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptions {
   const decision = context.decision || { mode: 'banter', humorMechanism: null, target: 'current behavior', callback: null, serious: false, register: 'direct', intensity: 4 } as TurnDecision;
@@ -32,8 +36,31 @@ export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptio
     }
     prompt += `These are observations from the challenge record. Do not invent additional facts or infer deep psychological traits from them.\n\n`;
   }
+  if (context.selectedRivalMemory) {
+    const mem = context.selectedRivalMemory.memory;
+    prompt += `GROUNDED RIVAL MEMORY (Deterministically selected — authority: ${mem.epistemicStatus}):\n`;
+    prompt += `- [${mem.type.toUpperCase()}] ${mem.description}\n`;
+    if (mem.verbatimQuote) {
+      prompt += `- Verbatim user quote (grounded; do NOT fabricate): "${mem.verbatimQuote}"\n`;
+    }
+    prompt += `- Reason selected: ${context.selectedRivalMemory.reason}\n`;
+    prompt += `You MAY reference this memory naturally. Do NOT force it. Do NOT invent facts beyond what is stated. Do NOT treat ${mem.epistemicStatus === 'hypothesis' ? 'this hypothesis as an established fact' : 'this as a character judgment'}.\n\n`;
+  }
+  if (context.characterPlan) {
+    const plan = context.characterPlan;
+    prompt += `DETERMINISTIC CHARACTER DIRECTION (authoritative for this response):\n- Mood: ${plan.state.mood}\n- Interaction shape: ${plan.interactionMode}\n- Seriousness: ${plan.state.seriousness}/10\n- Sincerity selected: ${plan.sincerity}\n- Humor opportunity: ${plan.humor ? `${plan.humor.mechanism} targeting ${plan.humor.target}; reason: ${plan.humor.reason}` : 'none — do not force a joke'}\n\n`;
+  }
+  if (context.challengeSelection) {
+    const selection = context.challengeSelection;
+    prompt += `DETERMINISTIC CHALLENGE SHAPE (authoritative; render its wording, do not replace it):\n- Primitive: ${selection.primitive}\n- Objective: ${selection.objective}\n- Difficulty: ${selection.difficulty}/10\n- Constraints: ${selection.constraints.join(' ')}\n- Expected duration: ${selection.expectedDurationMinutes ?? 'not timed'} minutes\n- Evidence: ${selection.evidenceExpectation}\n\n`;
+  }
+  if (context.presenceDecision?.action) {
+    const presence = context.presenceDecision;
+    prompt += `DETERMINISTIC PRESENCE EVENT (render only this already-selected event; do not invent ambient activity):\n- State: ${presence.state}\n- Activity: ${presence.activity}\n- Event: ${presence.action}\n- Reason: ${presence.reason}\n\n`;
+  }
   prompt += `DETERMINISTIC RESPONSE PLAN (follow exactly):\n- Mode: ${decision.mode}\n- Serious: ${decision.serious}\n- Register: ${decision.register}\n- Intensity: ${decision.intensity}\n- Humor mechanism: ${decision.humorMechanism || 'none'}\n- Target concept: ${decision.target}\n`;
   if (decision.callback) prompt += `- Grounded callback (use only if useful): [${decision.callback.item.category}] ${decision.callback.item.key}: ${JSON.stringify(decision.callback.item.value)}\n`;
   prompt += `\n--- INSTRUCTIONS ---\nWrite the best possible response in the selected style. Do not change the selected mode, seriousness, mechanism, or target. Do not invent memories or historical facts. Do not suggest authoritative events. DO NOT supply authoritative numeric relationship state.\n`;
   return { prompt, systemPrompt: CHARACTER_SYSTEM_PROMPT };
 }
+

@@ -6,13 +6,19 @@ import { buildCharacterPrompt } from '../ai/prompts/promptBuilder.js';
 import type { Challenge } from '../types/challenge.js';
 import type { RelationshipState } from '../types/relationship.js';
 import type { RankedMemoryItem } from '../memory/retrieval.js';
+import { deriveCharacterPlan, type CharacterPlan, type DirectorHumorMechanism } from './characterDirector.js';
+import { deriveProcessInsights, type ProcessInsight } from './processInsights.js';
+import type { PresenceDecision } from './presenceEngine.js';
+import { inferChallengeDomain, selectChallengePrimitive, type ChallengeOutcome, type ChallengePrimitive, type ChallengeSelection } from '../challenge/challengeSelector.js';
+import { deriveRivalMemories, type RivalMemory } from './rivalMemory.js';
+import { selectRivalMemory, type SelectedMemory } from './rivalMemorySelector.js';
 
 const RESPONSE_MODES = ['roast', 'observational_roast', 'challenge', 'judgment', 'grudging_praise', 'serious', 'supportive', 'banter', 'bored', 'curious', 'help', 'meta_rejection'] as const;
 const HUMOR_MECHANISMS = ['deadpan', 'mock_formal', 'absurd_escalation', 'observational', 'contextual_roast', 'callback', 'running_joke', 'irony', 'sarcasm', 'wit', 'nonsense', 'anti_climax', 'self_aware', 'self_deprecation', 'unexpected_praise', 'strategic_silence'] as const;
 const MEMORY_CATEGORIES = new Set(['goal', 'achievement', 'failure', 'commitment', 'milestone', 'running_joke', 'observation', 'preference']);
 
 export type ResponseMode = typeof RESPONSE_MODES[number];
-export type HumorMechanism = typeof HUMOR_MECHANISMS[number];
+export type HumorMechanism = DirectorHumorMechanism;
 export interface TurnDecision { mode: ResponseMode; humorMechanism: HumorMechanism | null; target: string; callback: RankedMemoryItem | null; serious: boolean; register: string; intensity: number; }
 
 export interface ProcessCapture {
@@ -22,8 +28,10 @@ export interface ProcessCapture {
   timestamp: string;
 }
 
-export interface PlanTurnOptions { userId: string; userInput: string; activeChallenge?: Challenge | null; }
+export interface PlanTurnOptions { userId: string; userInput: string; activeChallenge?: Challenge | null; presenceDecision?: PresenceDecision | null; }
+export interface AmbientTurnOptions { userId: string; presenceDecision: PresenceDecision; activeChallenge?: Challenge | null; }
 export interface PlanTurnDependencies { modelRouter: ModelRouter; relationshipStore: IRelationshipStateStore; memoryStore: IMemoryStore; humorStore: IHumorStateStore; eventStore?: import('../store/index.js').IEventStore; }
+export interface PlannedResponse extends AIResponseContract { challengeSelection?: ChallengeSelection | null; }
 
 
 function hasAny(input: string, terms: readonly string[]): boolean { return terms.some((term) => input.includes(term)); }
@@ -57,17 +65,19 @@ function isGroundedMemory(candidate: AIMemoryCandidate, userInput: string, activ
   return challengeSource.includes(candidateText);
 }
 
-import { deriveProcessInsights, type ProcessInsight } from './processInsights.js';
-
 export class ResponsePlanner {
   constructor(private readonly deps: PlanTurnDependencies) {}
-  async planTurn(options: PlanTurnOptions): Promise<AIResponseContract> {
-    const { userId, userInput, activeChallenge } = options;
+  /** Renders a concrete deterministic ambient event only; silence costs zero AI calls. */
+  async planAmbientTurn(options: AmbientTurnOptions): Promise<PlannedResponse | null> {
+    if (!options.presenceDecision.action) return null;
+    return this.planTurn({ userId: options.userId, userInput: '', activeChallenge: options.activeChallenge, presenceDecision: options.presenceDecision });
+  }
+  async planTurn(options: PlanTurnOptions): Promise<PlannedResponse> {
+    const { userId, userInput, activeChallenge, presenceDecision } = options;
     const relationship = await this.deps.relationshipStore.get(userId);
     if (!relationship) throw new Error('Relationship state not found for user');
     const memories = await this.deps.memoryStore.retrieveRelevant(userId, { tags: [userInput], topK: 3 });
     const recentHumor = await this.deps.humorStore.recentMechanisms(userId);
-    const decision = selectTurnDecision(userInput, relationship, activeChallenge, memories, recentHumor);
 
     // Process captures are loaded only from the immutable event ledger. They are
     // voluntary user observations, not verified challenge facts.
@@ -87,12 +97,140 @@ export class ResponsePlanner {
       processInsights = deriveProcessInsights(activeChallenge, recentEvents);
     }
 
-    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, processCaptures, processInsights })));
+    const characterPlan = deriveCharacterPlan({
+      userInput,
+      relationship,
+      activeChallenge,
+      memories,
+      processInsights: processInsights || [],
+      recentHumor,
+      presenceDecision,
+    });
+
+    // ── Rival Memory derivation (pure, deterministic, zero AI calls) ──────────
+    let rivalMemories: RivalMemory[] = [];
+    let selectedRivalMemory: SelectedMemory | null = null;
+    {
+      const allEvents = (activeChallenge && this.deps.eventStore)
+        ? await this.deps.eventStore.recentForUser(userId, 100)
+        : [];
+      const existingMemoryItems = memories.map(r => r.item);
+      const normalizedChallenge: Challenge | null = activeChallenge ?? null;
+      const memDerivation = deriveRivalMemories({
+        userInput,
+        activeChallenge: normalizedChallenge,
+        processInsights: processInsights || [],
+        recentEvents: allEvents,
+        existingMemories: existingMemoryItems,
+        nowIso: new Date().toISOString(),
+        userId,
+      });
+      rivalMemories = memDerivation.newMemories;
+
+      // Persist new rival memories via existing memoryStore (category = observation / commitment / etc.)
+      for (const mem of memDerivation.newMemories) {
+        if (mem.epistemicStatus !== 'hypothesis') {
+          await this.deps.memoryStore.write({
+            userId,
+            tier: mem.type === 'behavioral' || mem.type === 'relationship' ? 'permanent' : 'decaying',
+            category: mem.type === 'callback' ? 'running_joke' : mem.type === 'factual' ? 'commitment' : mem.type === 'behavioral' ? 'observation' : mem.type === 'relationship' ? 'milestone' : 'observation',
+            key: mem.key,
+            value: JSON.stringify({ description: mem.description, verbatimQuote: mem.verbatimQuote, epistemicStatus: mem.epistemicStatus, provenance: mem.provenance }),
+            strength: Math.round(mem.confidence * 100),
+            expiresAt: mem.type === 'unresolved' ? null : mem.type === 'factual' ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : null,
+          }).catch(() => { /* non-blocking */ });
+        }
+      }
+
+      // Determine isSeriousContext / isChallengeCritical for selector
+      const isSeriousContext = characterPlan.state.seriousness >= 7;
+      const isChallengeCritical = activeChallenge?.status === 'evidence_submitted' || activeChallenge?.status === 'needs_more_evidence';
+
+      // Build RivalMemory candidates from existing stored memories too
+      const storedAsRivalMemories: RivalMemory[] = memories.map(r => ({
+        key: r.item.key,
+        type: 'callback' as const,
+        epistemicStatus: 'reported' as const,
+        description: `${r.item.category}: ${String(r.item.value)}`,
+        verbatimQuote: typeof r.item.value === 'string' ? r.item.value : null,
+        confidence: r.item.strength / 100,
+        strength: r.item.strength,
+        provenance: { sourceEventIds: [], sourceInsightTypes: [], challengeId: null, derivedAt: r.item.createdAt },
+      }));
+
+      const allRivalMemories = [...storedAsRivalMemories, ...memDerivation.newMemories];
+
+      selectedRivalMemory = selectRivalMemory({
+        memories: allRivalMemories,
+        userInput,
+        relationship,
+        activeChallenge: normalizedChallenge,
+        isSeriousContext,
+        isChallengeCritical,
+        recentHumor,
+        recentlySurfacedKeys: [],
+        nowIso: new Date().toISOString(),
+      });
+    }
+
+    let recentPrimitives: ChallengePrimitive[] = [];
+    let recentOutcomes: ChallengeOutcome[] = [];
+    let firstSession = !activeChallenge;
+    if (characterPlan.interactionMode === 'challenge_invitation' && !activeChallenge && this.deps.eventStore) {
+      const history = await this.deps.eventStore.recentForUser(userId, 50);
+      firstSession = !history.some((event) => event.eventType === 'challenge_issued');
+      recentPrimitives = history
+        .filter((event) => event.eventType === 'challenge_issued')
+        .map((event) => (event.payload as { primitive?: unknown }).primitive)
+        .filter((primitive): primitive is ChallengePrimitive => typeof primitive === 'string' && isChallengePrimitive(primitive));
+      recentOutcomes = history
+        .filter((event) => event.eventType === 'challenge_judged')
+        .map((event) => (event.payload as { verdict?: unknown }).verdict)
+        .filter((outcome): outcome is ChallengeOutcome => outcome === 'passed' || outcome === 'failed' || outcome === 'needs_more_evidence');
+    }
+    const challengeSelection = characterPlan.interactionMode === 'challenge_invitation'
+      ? selectChallengePrimitive({
+          objective: userInput,
+          domain: inferChallengeDomain(userInput),
+          difficulty: 3,
+          relationship,
+          interactionMode: characterPlan.interactionMode,
+          activeChallenge,
+          firstSession,
+          recentPrimitives,
+          recentOutcomes,
+          processInsights: processInsights || [],
+        })
+      : null;
+    const decision = decisionFromCharacterPlan(characterPlan, relationship, memories);
+
+    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, characterPlan, challengeSelection, presenceDecision, processCaptures, processInsights, selectedRivalMemory })));
     for (const candidate of aiResponse.memoryCandidates || []) {
       if (isGroundedMemory(candidate, userInput, activeChallenge)) await this.deps.memoryStore.write({ userId, tier: candidate.tier, category: candidate.category, key: candidate.key, value: candidate.value, strength: Math.floor(candidate.confidence * 100) });
     }
     if (decision.humorMechanism && HUMOR_MECHANISMS.includes(decision.humorMechanism)) await this.deps.humorStore.record(userId, decision.humorMechanism, decision.target, decision.intensity);
     // Event suggestions are advisory only and deliberately have no generic persistence path.
-    return { ...aiResponse, humorMechanism: decision.humorMechanism, register: decision.register, seriousFlag: decision.serious };
+    return { ...aiResponse, humorMechanism: decision.humorMechanism, register: decision.register, seriousFlag: decision.serious, challengeSelection };
   }
+}
+
+function isChallengePrimitive(value: string): value is ChallengePrimitive {
+  return ['micro_test', 'timed_execution', 'proof_of_work', 'constraint_test', 'knowledge_demonstration', 'recovery_test', 'strategy_switch_test', 'contradiction_test', 'creative_test', 'real_world_action'].includes(value);
+}
+
+function decisionFromCharacterPlan(plan: CharacterPlan, relationship: RelationshipState, memories: readonly RankedMemoryItem[]): TurnDecision {
+  const modeByInteraction: Record<CharacterPlan['interactionMode'], ResponseMode> = {
+    banter: 'banter', observation: 'observational_roast', challenge_invitation: 'challenge', challenge_response: 'judgment',
+    callback: 'roast', sincere_recognition: 'grudging_praise', serious_intervention: 'serious', pushback: 'roast', question: 'curious', quiet: 'bored',
+  };
+  const callback = plan.humor?.target === 'historical_callback' ? memories[0] || null : null;
+  return {
+    mode: modeByInteraction[plan.interactionMode],
+    humorMechanism: plan.humor?.mechanism || null,
+    target: plan.target || 'current behavior',
+    callback,
+    serious: plan.state.seriousness >= 7,
+    register: relationship.familiarity >= 60 ? 'informal' : 'direct',
+    intensity: plan.humor?.intensity || plan.state.intensity,
+  };
 }

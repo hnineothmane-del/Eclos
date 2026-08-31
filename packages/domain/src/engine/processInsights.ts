@@ -218,15 +218,22 @@ export function deriveProcessInsights(
   }
 
   // successful_under_time_pressure
-  if (challenge.expectedDurationMinutes && isCompleted) {
+  if (challenge.expectedDurationMinutes && isCompleted && startEvent) {
     const success = judgments.find(j => (j.payload as any)?.verdict === 'passed');
-    insights.push({
-      type: 'successful_under_time_pressure',
-      challengeId: challenge.id,
-      sourceEventIds: success ? [success.id] : [],
-      description: `User successfully completed the time-constrained challenge.`,
-      confidence: 0.85,
-    });
+    if (success) {
+      const actualMs = new Date(success.createdAt).getTime() - new Date(startEvent.createdAt).getTime();
+      const expectedMs = challenge.expectedDurationMinutes * 60 * 1000;
+      // Only fire if user completed within the expected time window (10% grace)
+      if (actualMs <= expectedMs * 1.1) {
+        insights.push({
+          type: 'successful_under_time_pressure',
+          challengeId: challenge.id,
+          sourceEventIds: [success.id],
+          description: `User successfully completed the time-constrained challenge in ${Math.floor(actualMs / 1000)}s.`,
+          confidence: 0.85,
+        });
+      }
+    }
   }
 
   // difficulty_after_negotiation
