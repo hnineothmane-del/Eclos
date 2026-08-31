@@ -15,6 +15,7 @@ import { selectRivalMemory, type SelectedMemory } from './rivalMemorySelector.js
 import { deriveRivalInsights, type RivalInsight } from './rivalInsights.js';
 import { selectRivalInsight, type SelectedInsight } from './rivalInsightSelector.js';
 import { deriveAgencyDecision, type RivalInitiativeDecision } from './rivalAgency.js';
+import { deriveRivalLivingState, type RivalLivingState } from './rivalLivingState.js';
 
 const RESPONSE_MODES = ['roast', 'observational_roast', 'challenge', 'judgment', 'grudging_praise', 'serious', 'supportive', 'banter', 'bored', 'curious', 'help', 'meta_rejection'] as const;
 const HUMOR_MECHANISMS = ['deadpan', 'mock_formal', 'absurd_escalation', 'observational', 'contextual_roast', 'callback', 'running_joke', 'irony', 'sarcasm', 'wit', 'nonsense', 'anti_climax', 'self_aware', 'self_deprecation', 'unexpected_praise', 'strategic_silence'] as const;
@@ -260,7 +261,14 @@ export class ResponsePlanner {
       : null;
     const decision = decisionFromCharacterPlan(characterPlan, relationship, memories);
 
-    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, characterPlan, challengeSelection, presenceDecision, processCaptures, processInsights, selectedRivalMemory, selectedInsight, agencyDecision })));
+    // Derive living state (pure, zero AI calls) and pass into prompt builder
+    const rivalLivingState = deriveRivalLivingState(
+      presenceDecision ?? { state: 'active', activity: 'watching', attention: 'ignore', action: null, reason: 'no_worthy_event', sourceEventIds: [], generatedAt: new Date().toISOString() },
+      agencyDecision,
+      new Date().toISOString(),
+    );
+
+    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, characterPlan, challengeSelection, presenceDecision, processCaptures, processInsights, selectedRivalMemory, selectedInsight, agencyDecision, rivalLivingState })));
     for (const candidate of aiResponse.memoryCandidates || []) {
       if (isGroundedMemory(candidate, userInput, activeChallenge)) await this.deps.memoryStore.write({ userId, tier: candidate.tier, category: candidate.category, key: candidate.key, value: candidate.value, strength: Math.floor(candidate.confidence * 100) });
     }

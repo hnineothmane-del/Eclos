@@ -11,8 +11,9 @@ import type { PresenceDecision } from '../../engine/presenceEngine.js';
 import type { SelectedMemory } from '../../engine/rivalMemorySelector.js';
 import type { SelectedInsight } from '../../engine/rivalInsightSelector.js';
 import type { RivalInitiativeDecision } from '../../engine/rivalAgency.js';
+import type { RivalLivingState } from '../../engine/rivalLivingState.js';
 
-export interface BuildPromptContext { userInput: string; relationship: RelationshipState; activeChallenge?: Challenge | null; decision?: TurnDecision; characterPlan?: CharacterPlan; challengeSelection?: ChallengeSelection | null; presenceDecision?: PresenceDecision | null; memories?: RankedMemoryItem[]; recentHumor?: string[]; processCaptures?: ProcessCapture[]; processInsights?: ProcessInsight[]; selectedRivalMemory?: SelectedMemory | null; selectedInsight?: SelectedInsight | null; agencyDecision?: RivalInitiativeDecision | null; }
+export interface BuildPromptContext { userInput: string; relationship: RelationshipState; activeChallenge?: Challenge | null; decision?: TurnDecision; characterPlan?: CharacterPlan; challengeSelection?: ChallengeSelection | null; presenceDecision?: PresenceDecision | null; memories?: RankedMemoryItem[]; recentHumor?: string[]; processCaptures?: ProcessCapture[]; processInsights?: ProcessInsight[]; selectedRivalMemory?: SelectedMemory | null; selectedInsight?: SelectedInsight | null; agencyDecision?: RivalInitiativeDecision | null; rivalLivingState?: RivalLivingState | null; }
 
 export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptions {
   const decision = context.decision || { mode: 'banter', humorMechanism: null, target: 'current behavior', callback: null, serious: false, register: 'direct', intensity: 4 } as TurnDecision;
@@ -71,6 +72,13 @@ export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptio
   }
   if (context.agencyDecision && context.agencyDecision.action !== 'QUIET') {
     prompt += `DETERMINISTIC RIVAL INITIATIVE (authoritative for this turn):\n- Action: ${context.agencyDecision.action}\n- Reason: ${context.agencyDecision.reason}\n- Urgency: ${context.agencyDecision.urgency}\n\n`;
+  }
+  if (context.rivalLivingState) {
+    const ls = context.rivalLivingState;
+    if (ls.internalState !== 'active' || ls.microActivity !== 'watching') {
+      // Only inject when state is non-trivial — active/watching is the default
+      prompt += `RIVAL INTERNAL STATE (context for authentic voice — do not narrate these facts directly):\n- Was: ${ls.internalState} / ${ls.microActivity}\n- Expression: ${ls.expressionMode}${ls.isTransition ? ' (transition — he was just interrupted or returned)' : ''}\n${ls.authorizedAmbientEvent ? `- Ambient event: ${ls.authorizedAmbientEvent}\n` : ''}\n`;
+    }
   }
   prompt += `DETERMINISTIC RESPONSE PLAN (follow exactly):\n- Mode: ${decision.mode}\n- Serious: ${decision.serious}\n- Register: ${decision.register}\n- Intensity: ${decision.intensity}\n- Humor mechanism: ${decision.humorMechanism || 'none'}\n- Target concept: ${decision.target}\n`;
   if (decision.callback) prompt += `- Grounded callback (use only if useful): [${decision.callback.item.category}] ${decision.callback.item.key}: ${JSON.stringify(decision.callback.item.value)}\n`;
