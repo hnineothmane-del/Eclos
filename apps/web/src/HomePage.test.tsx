@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { HomePage } from './pages/HomePage';
@@ -7,10 +7,12 @@ import * as api from './lib/api';
 vi.mock('./lib/api', () => ({
   ensureSession: vi.fn(),
   chatTurn: vi.fn(),
+  ambientTurn: vi.fn(),
   acceptChallenge: vi.fn(),
   declineChallenge: vi.fn(),
   submitEvidence: vi.fn(),
-  checkJudgment: vi.fn()
+  checkJudgment: vi.fn(),
+  getGroundedProcessInsight: vi.fn()
 }));
 
 // Mock supabase db calls inside HomePage
@@ -39,6 +41,8 @@ describe('HomePage First-Session Vertical Slice', () => {
   it('landing renders Rival and goal choices', () => {
     render(<HomePage />);
     expect(screen.getByText(/What are we proving?/i)).toBeInTheDocument();
+    expect(screen.getByText('Rival')).toBeInTheDocument();
+    expect(screen.getByText(/Pick a quick claim/i)).toBeInTheDocument();
     expect(screen.getByText('Get better at coding')).toBeInTheDocument();
   });
 
@@ -46,15 +50,16 @@ describe('HomePage First-Session Vertical Slice', () => {
     (api.chatTurn as any).mockResolvedValue({ response: 'Bring it on' });
 
     render(<HomePage />);
-    const input = screen.getByPlaceholderText('I want to...');
+    const input = screen.getByPlaceholderText('Or make your own claim...');
     fireEvent.change(input, { target: { value: 'Learn piano' } });
     
-    const submitBtn = screen.getByRole('button', { name: /Tell Rival/i });
+    const submitBtn = screen.getByRole('button', { name: /Make the claim/i });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
       expect(api.chatTurn).toHaveBeenCalledWith('Learn piano');
     });
+    expect(api.chatTurn).toHaveBeenCalledTimes(1);
   });
 
   it('backend Rival response renders', async () => {
@@ -111,6 +116,9 @@ describe('HomePage First-Session Vertical Slice', () => {
     await waitFor(() => {
       expect(api.acceptChallenge).toHaveBeenCalledWith('c1');
       expect(screen.getByText('ACTIVE CHALLENGE')).toBeInTheDocument();
+      expect(screen.getByText('RIVAL LENS')).toBeInTheDocument();
+      expect(screen.getByLabelText(/Rival Lens thought input/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Send signal: STUCK' })).toBeInTheDocument();
     });
 
     const proofInput = screen.getByPlaceholderText(/Submit your proof/i);
@@ -118,6 +126,7 @@ describe('HomePage First-Session Vertical Slice', () => {
     
     // Check judgment visual representation
     (api.checkJudgment as any).mockResolvedValue({ verdict: 'passed', feedback: 'Good job', respect_delta: 5 });
+    vi.mocked(api.getGroundedProcessInsight).mockResolvedValue('User changed strategy once during the challenge.');
 
     fireEvent.click(screen.getByRole('button', { name: /SUBMIT PROOF/i }));
 
@@ -128,6 +137,8 @@ describe('HomePage First-Session Vertical Slice', () => {
     await waitFor(() => {
       expect(screen.getByText('PASSED')).toBeInTheDocument();
       expect(screen.getByText(/"Good job"/i)).toBeInTheDocument();
+      expect(screen.getByText(/User changed strategy once/i)).toBeInTheDocument();
+      expect(screen.getByText('Suspiciously competent')).toBeInTheDocument();
     }, { timeout: 3000 });
   });
 
@@ -162,5 +173,35 @@ describe('HomePage First-Session Vertical Slice', () => {
       expect(screen.getByText(/You have a Rival now/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Preserve Account/i })).toBeInTheDocument();
     });
+  });
+
+  it('uses no ambient generation for a normal first interaction', async () => {
+    vi.mocked(api.chatTurn).mockResolvedValue({ response: 'Bring it on' });
+    render(<HomePage />);
+    fireEvent.click(screen.getByText('Get in shape'));
+    await waitFor(() => expect(api.chatTurn).toHaveBeenCalledTimes(1));
+    expect(api.ambientTurn).not.toHaveBeenCalled();
+  });
+
+  it('renders a deterministic ambient remark through the existing chat-turn path', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.ambientTurn).mockResolvedValue({ response: 'You returned. Remarkable.' });
+    render(<HomePage />);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    fireEvent(document, new Event('visibilitychange'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(31 * 60 * 1000); });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    fireEvent(document, new Event('visibilitychange'));
+    await act(async () => {});
+    expect(api.ambientTurn).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText('Rival ambient remark')).toHaveTextContent('You returned. Remarkable.');
+    vi.useRealTimers();
+  });
+
+  it('keeps the first action reachable on a 320px viewport', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 320 });
+    render(<HomePage />);
+    expect(screen.getByRole('button', { name: /Make the claim/i })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/make your own claim/i)).toBeInTheDocument();
   });
 });

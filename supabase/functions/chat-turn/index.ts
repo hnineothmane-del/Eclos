@@ -6,11 +6,13 @@ import {
   SupabaseRelationshipStateStore, 
   SupabaseMemoryStore, 
   SupabaseHumorStateStore, 
-  SupabaseEventStore 
+  SupabaseEventStore,
+  type PresenceDecision,
 } from '@ai-rival/domain';
 
 const corsHeaders = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
-const activeStatuses = ['accepted', 'started', 'attempted', 'evidence_submitted', 'needs_more_evidence'];
+const activeStatuses = ['issued', 'negotiated', 'accepted', 'started', 'attempted', 'evidence_submitted', 'needs_more_evidence'];
+const ambientEventTypes = new Set(['ambient_observation', 'ambient_comment', 'unexpected_wake', 'sleep_start', 'sleep_end', 'return_greeting', 'idle_reaction', 'session_reentry', 'rare_character_event']);
 
 function json(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -25,6 +27,20 @@ function mapChallenge(row: Record<string, any>) {
     hypothesis: parameters.hypothesis || null, status: row.status, evidenceRound: parameters.evidence_round || 0,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
+}
+
+function isAmbientDecision(value: unknown): value is { state: string; activity: string; attention: string; action: string; reason: string; sourceEventIds: string[]; generatedAt: string } {
+  if (!value || typeof value !== 'object') return false;
+  const decision = value as Record<string, unknown>;
+  return typeof decision.state === 'string'
+    && typeof decision.activity === 'string'
+    && typeof decision.attention === 'string'
+    && typeof decision.action === 'string'
+    && ambientEventTypes.has(decision.action)
+    && typeof decision.reason === 'string'
+    && typeof decision.generatedAt === 'string'
+    && Array.isArray(decision.sourceEventIds)
+    && decision.sourceEventIds.every((id) => typeof id === 'string');
 }
 
 serve(async (req) => {
@@ -45,7 +61,9 @@ serve(async (req) => {
     const { data: { user }, error: authError } = await authClient.auth.getUser();
     if (authError || !user) return json({ error: 'Unauthorized' }, 401);
     const body = await req.json();
-    if (typeof body.userInput !== 'string' || !body.userInput.trim()) return json({ error: 'userInput is required' }, 400);
+    const ambientDecision = isAmbientDecision(body.presenceDecision) ? body.presenceDecision : null;
+    const userInput = typeof body.userInput === 'string' ? body.userInput.trim() : '';
+    if (!userInput && !ambientDecision) return json({ error: 'userInput or a valid ambient presence event is required' }, 400);
 
     const trustedClient = createClient(supabaseUrl, serviceRoleKey);
     
@@ -71,38 +89,37 @@ serve(async (req) => {
       eventStore: new SupabaseEventStore(dbClient),
     });
     
-    const aiResponse = await planner.planTurn({ 
-      userId: user.id, 
-      userInput: body.userInput, 
-      activeChallenge
-    });
+    const aiResponse = ambientDecision
+      ? await planner.planAmbientTurn({ userId: user.id, presenceDecision: ambientDecision as PresenceDecision, activeChallenge })
+      : await planner.planTurn({ userId: user.id, userInput, activeChallenge });
 
-    // Minimal deterministic bridge to support the first-session experience
-    if (aiResponse.eventSuggestions && !activeChallenge) {
-      for (const event of aiResponse.eventSuggestions) {
-        if (event.suggestedEventType === 'challenge_issued' || event.suggestedEventType === 'challenge_request') {
-          try {
-            const { ChallengeEngine } = await import('@ai-rival/domain');
-            const challengeEngine = new ChallengeEngine({
-              client: dbClient,
-              authenticatedUserId: user.id,
-              router: modelRouter
-            });
-            await challengeEngine.issue(user.id, {
-              userId: user.id,
-              domain: 'general',
-              objective: (event.suggestedPayload?.objective as string) || 'Prove it',
-              difficulty: 5
-            });
-            break;
-          } catch (e) {
-            console.error('Failed to bridge challenge issue:', e);
-          }
-        }
+    // A silent presence result is not a model call and has no UI message.
+    if (!aiResponse) return json({ ambient: true, response: null });
+
+    // The selector is deterministic server-side context; AI event suggestions
+    // never create challenges.
+    if (!ambientDecision && aiResponse.challengeSelection && !activeChallenge) {
+      try {
+        const { ChallengeEngine } = await import('@ai-rival/domain');
+        const selection = aiResponse.challengeSelection;
+        const challengeEngine = new ChallengeEngine({ client: dbClient, authenticatedUserId: user.id, router: modelRouter });
+        await challengeEngine.issue(user.id, {
+          userId: user.id,
+          domain: selection.domain,
+          objective: selection.objective,
+          difficulty: selection.difficulty,
+          constraints: selection.constraints,
+          expectedDurationMinutes: selection.expectedDurationMinutes,
+          verificationLevel: selection.verificationLevel,
+          hypothesis: `Selected primitive: ${selection.primitive}`,
+          primitive: selection.primitive,
+        });
+      } catch (e) {
+        console.error('Failed to issue deterministic challenge:', e);
       }
     }
 
-    return json({ response: aiResponse.response, intent: aiResponse.intent, mode: aiResponse.register, humorMechanism: aiResponse.humorMechanism });
+    return json({ response: aiResponse.response, intent: aiResponse.intent, mode: aiResponse.register, humorMechanism: aiResponse.humorMechanism, seriousFlag: aiResponse.seriousFlag, ambient: !!ambientDecision });
   } catch (error) {
     console.error('chat-turn failed', error);
     return json({ error: 'Unable to complete chat turn' }, 500);

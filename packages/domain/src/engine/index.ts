@@ -9,6 +9,8 @@ export * from './rivalInsights.js';
 export * from './rivalInsightSelector.js';
 export * from './rivalAgency.js';
 export * from './rivalLivingState.js';
+export * from './rivalInteraction.js';
+export * from './rivalSituationalContext.js';
 
 /** @deprecated Placeholder — will be removed once all consumers are updated */
 export const ENGINE_MODULE = 'engine';

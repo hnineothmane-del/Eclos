@@ -22,6 +22,7 @@ import {
   type RespectDelta,
 } from '../engine/respectEngine.js';
 import { clamp } from '../util/clamp.js';
+import type { ChallengePrimitive } from './challengeSelector.js';
 import {
   StoreError,
   StoreValidationError,
@@ -89,6 +90,8 @@ export interface IssueChallengeParams {
   verificationLevel?: VerificationLevel;
   goalId?: string | null;
   hypothesis?: string | null;
+  /** Deterministic structural shape selected before wording is generated. */
+  primitive?: ChallengePrimitive;
 }
 
 export interface NegotiateChallengeChanges {
@@ -356,6 +359,7 @@ export class ChallengeEngine {
       verification_level: verificationLevel,
       hypothesis,
       evidence_round: 0,
+      challenge_primitive: params.primitive ?? null,
     };
 
     const insertPayload: Record<string, unknown> = {
@@ -390,6 +394,7 @@ export class ChallengeEngine {
         objective: params.objective,
         difficulty: difficultyClamped,
         domain: params.domain,
+        primitive: params.primitive ?? null,
       },
     });
 
@@ -475,7 +480,7 @@ export class ChallengeEngine {
       );
     }
 
-    const { data, error } = await this.client.rpc<Record<string, unknown>>(
+    const { data: _data, error } = await this.client.rpc<Record<string, unknown>>(
       'transition_challenge_status',
       {
         p_challenge_id: challengeId,

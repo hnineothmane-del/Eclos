@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { ProductIdentity } from '../config/identity';
-import { chatTurn, ensureSession, acceptChallenge, declineChallenge, submitEvidence, checkJudgment } from '../lib/api';
+import { ambientTurn, chatTurn, ensureSession, acceptChallenge, declineChallenge, submitEvidence, checkJudgment, getGroundedProcessInsight } from '../lib/api';
+import type { Challenge, PresenceDecision } from '@ai-rival/domain';
 import { supabase } from '../lib/supabase';
 import { RivalLens } from '../components/RivalLens';
+import { RivalPresence } from '../components/RivalPresence';
+import { useRivalPresence } from '../components/useRivalPresence';
 import { getCaptureProfile } from '../lib/captureProfile';
 import '../styles/home.css';
 
@@ -29,6 +32,23 @@ export const HomePage: React.FC = () => {
   const [activeChallenge, setActiveChallenge] = useState<any>(null);
   const [proofText, setProofText] = useState('');
   const [judgment, setJudgment] = useState<any>(null);
+  const [groundedInsight, setGroundedInsight] = useState<string | null>(null);
+  const [ambientMessage, setAmbientMessage] = useState<string | null>(null);
+
+  const handleAmbientEvent = useCallback(async (presenceDecision: PresenceDecision) => {
+    try {
+      const result = await ambientTurn(presenceDecision);
+      if (typeof result?.response === 'string' && result.response.trim()) setAmbientMessage(result.response);
+    } catch {
+      // Ambient presence is deliberately non-blocking. A failed aside must not
+      // interrupt the challenge or replace the user's current screen.
+    }
+  }, []);
+  const rivalPresence = useRivalPresence({
+    activeChallenge: activeChallenge as Challenge | null,
+    serious: Boolean(response?.seriousFlag),
+    onAmbientEvent: handleAmbientEvent,
+  });
 
   // Quick preset goals
   const presetGoals = [
@@ -37,8 +57,16 @@ export const HomePage: React.FC = () => {
     'Study consistently'
   ];
 
+  const standingFor = (verdict: string, delta: number) => {
+    if (verdict === 'passed' && delta > 0) return 'Suspiciously competent';
+    if (verdict === 'failed') return 'Still under review';
+    if (verdict === 'needs_more_evidence') return 'Unconvinced—for now';
+    return 'Being watched';
+  };
+
   const handleGoalSubmit = async (goal: string) => {
     try {
+      rivalPresence.markMeaningfulActivity();
       setFlow('LOADING');
       await ensureSession();
       
@@ -69,6 +97,7 @@ export const HomePage: React.FC = () => {
 
   const handleAccept = async () => {
     try {
+      rivalPresence.markMeaningfulActivity();
       setFlow('LOADING');
       await acceptChallenge(activeChallenge.id);
       setFlow('CHALLENGE_ACTIVE');
@@ -80,6 +109,7 @@ export const HomePage: React.FC = () => {
 
   const handleDecline = async () => {
     try {
+      rivalPresence.markMeaningfulActivity();
       setFlow('LOADING');
       await declineChallenge(activeChallenge.id);
       setActiveChallenge(null);
@@ -93,6 +123,7 @@ export const HomePage: React.FC = () => {
   const handleSubmitProof = async () => {
     if (!proofText.trim()) return;
     try {
+      rivalPresence.markMeaningfulActivity();
       setFlow('LOADING');
       await submitEvidence(activeChallenge.id, proofText);
       setFlow('SUBMITTING_PROOF');
@@ -105,6 +136,11 @@ export const HomePage: React.FC = () => {
         if (j) {
           clearInterval(poll);
           setJudgment(j);
+          try {
+            setGroundedInsight(await getGroundedProcessInsight(activeChallenge as Challenge));
+          } catch {
+            setGroundedInsight(null);
+          }
           setFlow('JUDGMENT');
         } else if (attempts > 15) { // Stop polling after a while
           clearInterval(poll);
@@ -120,9 +156,25 @@ export const HomePage: React.FC = () => {
   };
 
   const renderVisualAnchor = () => (
-    <div className="rival-anchor">
-      <span className="rival-symbol">{ProductIdentity.characterVisual}</span>
-    </div>
+    <>
+      <div className="rival-anchor" aria-label={`${ProductIdentity.characterName} is present`}>
+        <span className="rival-symbol" aria-hidden="true">{ProductIdentity.characterVisual}</span>
+        <div className="rival-identity">
+          <span className="eyebrow">{ProductIdentity.appName}</span>
+          <strong>{ProductIdentity.characterName}</strong>
+        </div>
+      </div>
+      <RivalPresence
+        visual={rivalPresence.visual}
+        onPresenceInteraction={rivalPresence.recordInteraction}
+      />
+      {ambientMessage && (
+        <section className="ambient-rival-message" aria-label="Rival ambient remark">
+          <p className="section-label">RIVAL, UNPROMPTED</p>
+          <p>“{ambientMessage}”</p>
+        </section>
+      )}
+    </>
   );
 
   return (
@@ -132,6 +184,8 @@ export const HomePage: React.FC = () => {
       {flow === 'ENTRY' && (
         <div className="step-container">
           <h1 className="rival-text">"So.<br/>What are we proving?"</h1>
+          <p className="entry-copy">Make a claim. Your Rival gives you something small enough to do now—and remembers whether you do it.</p>
+          <p className="section-label">PICK A QUICK CLAIM</p>
           <div className="preset-goals">
             {presetGoals.map(g => (
               <button key={g} className="btn-preset" onClick={() => handleGoalSubmit(g)}>{g}</button>
@@ -141,13 +195,13 @@ export const HomePage: React.FC = () => {
             <input 
               type="text" 
               className="input-custom" 
-              placeholder="I want to..." 
+              placeholder="Or make your own claim..."
               value={userInput}
               onChange={(e) => setUserInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && userInput.trim() && handleGoalSubmit(userInput)}
             />
             <button className="btn-primary" onClick={() => userInput.trim() && handleGoalSubmit(userInput)}>
-              Tell {ProductIdentity.characterName}
+              Make the claim
             </button>
           </div>
         </div>
@@ -161,6 +215,7 @@ export const HomePage: React.FC = () => {
 
       {flow === 'RIVAL_RESPONSE' && response && (
         <div className="step-container">
+          <p className="section-label">RIVAL</p>
           <h2 className="rival-text rival-response">"{response.response}"</h2>
           <div className="input-bar">
             <input 
@@ -178,17 +233,18 @@ export const HomePage: React.FC = () => {
 
       {flow === 'CHALLENGE_PRESENTED' && activeChallenge && (
         <div className="step-container">
-          {response && <h2 className="rival-text rival-response">"{response.response}"</h2>}
+          {response && <><p className="section-label">RIVAL</p><h2 className="rival-text rival-response">"{response.response}"</h2></>}
           <div className="challenge-card">
             <h3>PROVE IT</h3>
+            <p className="challenge-intro">Small enough to start. Specific enough to count.</p>
             <div className="challenge-details">
               <p><strong>Objective:</strong> {activeChallenge.title}</p>
-              <p><strong>Difficulty:</strong> {activeChallenge.difficulty}/10</p>
+              <p><strong>Pressure:</strong> {activeChallenge.difficulty}</p>
               <p><strong>Proof:</strong> Required</p>
             </div>
             <div className="challenge-actions">
               <button className="btn-primary" onClick={handleAccept}>ACCEPT</button>
-              <button className="btn-secondary">NEGOTIATE</button>
+              <button className="btn-secondary" aria-label="Negotiate this challenge in a future turn">NEGOTIATE</button>
               <button className="btn-subtle" onClick={handleDecline}>DECLINE</button>
             </div>
           </div>
@@ -200,7 +256,7 @@ export const HomePage: React.FC = () => {
           <div className="challenge-card active">
             <h3>ACTIVE CHALLENGE</h3>
             <p className="objective">{activeChallenge.title}</p>
-            <p className="hint">You can tell me you're done. Proof is different.</p>
+            <p className="hint">Work first. Leave a thought if you want. Proof is what settles it.</p>
 
             <RivalLens
               challengeId={activeChallenge.id}
@@ -227,13 +283,21 @@ export const HomePage: React.FC = () => {
       {flow === 'JUDGMENT' && judgment && (
         <div className="step-container">
           <div className="judgment-card">
+            <p className="section-label">VERDICT</p>
             <h2 className={`verdict ${judgment.verdict}`}>{judgment.verdict.toUpperCase()}</h2>
             <h3 className="rival-text">"{judgment.feedback || '...okay.'}"</h3>
-            
-            <div className="relationship-delta">
-              <p>RESPECT {judgment.respect_delta >= 0 ? '+' : ''}{judgment.respect_delta}</p>
+            {groundedInsight && (
+              <div className="judgment-observation">
+                <p className="section-label">OBSERVATION</p>
+                <p>{groundedInsight}</p>
+              </div>
+            )}
+            <div className="relationship-delta" aria-label="Relationship consequence">
+              <p className="section-label">RIVAL STANDING</p>
+              <strong>{standingFor(judgment.verdict, judgment.respect_delta)}</strong>
+              <span>Respect {judgment.respect_delta >= 0 ? '+' : ''}{judgment.respect_delta}</span>
             </div>
-            
+            <p className="next-action">Keep the record. The next challenge has more to work with.</p>
             <button className="btn-primary" onClick={() => setFlow('ACCOUNT_PRESERVATION')}>Continue</button>
           </div>
         </div>
@@ -242,8 +306,8 @@ export const HomePage: React.FC = () => {
       {flow === 'ACCOUNT_PRESERVATION' && (
         <div className="step-container preservation">
           <h2 className="rival-text">"You have a Rival now."</h2>
-          <p>Keep it?</p>
-          <p className="subtext">Creating an account preserves your progress, respect, and history.</p>
+          <p>Keep the record?</p>
+          <p className="subtext">Preserve what happened here—your proof, the Rival&apos;s judgment, and what it learns to notice next time.</p>
           
           <div className="preservation-actions">
             <button className="btn-primary">Preserve Account</button>

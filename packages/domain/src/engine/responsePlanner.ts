@@ -16,6 +16,8 @@ import { deriveRivalInsights, type RivalInsight } from './rivalInsights.js';
 import { selectRivalInsight, type SelectedInsight } from './rivalInsightSelector.js';
 import { deriveAgencyDecision, type RivalInitiativeDecision } from './rivalAgency.js';
 import { deriveRivalLivingState, type RivalLivingState, type RivalInteractionHook } from './rivalLivingState.js';
+import { deriveInteractionOutcome, extractInteractionRecords, type InteractionOutcome } from './rivalInteraction.js';
+import { deriveSituationalContext, type RivalSituationalContext } from './rivalSituationalContext.js';
 
 const RESPONSE_MODES = ['roast', 'observational_roast', 'challenge', 'judgment', 'grudging_praise', 'serious', 'supportive', 'banter', 'bored', 'curious', 'help', 'meta_rejection'] as const;
 const HUMOR_MECHANISMS = ['deadpan', 'mock_formal', 'absurd_escalation', 'observational', 'contextual_roast', 'callback', 'running_joke', 'irony', 'sarcasm', 'wit', 'nonsense', 'anti_climax', 'self_aware', 'self_deprecation', 'unexpected_praise', 'strategic_silence'] as const;
@@ -234,6 +236,7 @@ export class ResponsePlanner {
       selectedInsight,
       processInsights: processInsights || [],
       recentInitiatives: this.deps.eventStore ? await this.deps.eventStore.recentForUser(userId, 200) : [],
+      interactionHook: options.interactionHook ?? null,
       nowIso: new Date().toISOString(),
     });
 
@@ -268,7 +271,59 @@ export class ResponsePlanner {
       new Date().toISOString(),
     );
 
-    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, characterPlan, challengeSelection, presenceDecision, processCaptures, processInsights, selectedRivalMemory, selectedInsight, agencyDecision, rivalLivingState })));
+    // ── Interaction Outcome (T28) ─────────────────────────────────────────────
+    // If an interactionHook is present (tap/poke/wake/user_roast from the UI),
+    // resolve it deterministically. If visual-only → 0 AI calls → return null
+    // with the outcome attached for UI consumption.
+    let interactionOutcome: InteractionOutcome | null = null;
+    if (options.interactionHook) {
+      const allEventsForInteraction = this.deps.eventStore
+        ? await this.deps.eventStore.recentForUser(userId, 50)
+        : [];
+      interactionOutcome = deriveInteractionOutcome({
+        interaction: options.interactionHook,
+        livingState: rivalLivingState,
+        presence: presenceDecision ?? { state: 'active', activity: 'watching', attention: 'ignore', action: null, reason: 'no_worthy_event', sourceEventIds: [], generatedAt: new Date().toISOString() },
+        relationship,
+        activeChallenge: activeChallenge ?? null,
+        recentInteractions: extractInteractionRecords(allEventsForInteraction),
+        nowIso: new Date().toISOString(),
+      });
+
+      // Persist the interaction event so cooldowns work across turns
+      if (this.deps.eventStore) {
+        await this.deps.eventStore.append({
+          userId,
+          eventType: 'rival_interaction' as any,
+          source: 'user_action',
+          payload: {
+            interactionType: interactionOutcome.cooldownKey,
+            reaction: interactionOutcome.reaction,
+            speechAuthorized: interactionOutcome.speechAuthorized,
+          },
+        });
+      }
+
+      // Visual-only: 0 AI calls
+      if (interactionOutcome.visualOnly) {
+        return null;
+      }
+    }
+
+    // ── Situational Reaction Engine (T29) ─────────────────────────────────────
+    const situationalContext = deriveSituationalContext({
+      userInput,
+      activeChallenge: activeChallenge ?? null,
+      processInsights: processInsights || [],
+      selectedInsight,
+      selectedMemory: selectedRivalMemory,
+      agencyDecision,
+      interactionOutcome,
+      characterPlan,
+      nowIso: new Date().toISOString(),
+    });
+
+    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, characterPlan, challengeSelection, presenceDecision, processCaptures, processInsights, selectedRivalMemory, selectedInsight, agencyDecision, rivalLivingState, interactionOutcome, situationalContext })));
     for (const candidate of aiResponse.memoryCandidates || []) {
       if (isGroundedMemory(candidate, userInput, activeChallenge)) await this.deps.memoryStore.write({ userId, tier: candidate.tier, category: candidate.category, key: candidate.key, value: candidate.value, strength: Math.floor(candidate.confidence * 100) });
     }

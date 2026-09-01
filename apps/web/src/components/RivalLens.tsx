@@ -21,7 +21,7 @@ export const RivalLens: React.FC<RivalLensProps> = ({ challengeId, profile, onCa
   const [thought, setThought] = useState('');
   const [recentSignal, setRecentSignal] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(true);
   const exampleRef = useRef(Math.floor(Math.random() * EXAMPLE_THOUGHTS.length));
 
   const exampleThought = EXAMPLE_THOUGHTS[exampleRef.current];
@@ -70,7 +70,7 @@ export const RivalLens: React.FC<RivalLensProps> = ({ challengeId, profile, onCa
       {isExpanded && (
         <div className="lens-body" aria-live="polite">
           <p className="lens-instructions">
-            {profile.instructions}
+            {profile.instructions} This is optional—just leave a trace if it helps.
           </p>
           <p className="lens-example">{exampleThought}</p>
 
@@ -97,6 +97,7 @@ export const RivalLens: React.FC<RivalLensProps> = ({ challengeId, profile, onCa
                 onChange={e => setThought(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleThoughtSubmit()}
                 aria-label="Rival Lens thought input"
+                maxLength={1000}
               />
               {thought.trim() && (
                 <button className="btn-subtle lens-send" onClick={handleThoughtSubmit}>

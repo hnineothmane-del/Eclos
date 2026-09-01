@@ -12,8 +12,10 @@ import type { SelectedMemory } from '../../engine/rivalMemorySelector.js';
 import type { SelectedInsight } from '../../engine/rivalInsightSelector.js';
 import type { RivalInitiativeDecision } from '../../engine/rivalAgency.js';
 import type { RivalLivingState } from '../../engine/rivalLivingState.js';
+import type { InteractionOutcome } from '../../engine/rivalInteraction.js';
+import type { RivalSituationalContext } from '../../engine/rivalSituationalContext.js';
 
-export interface BuildPromptContext { userInput: string; relationship: RelationshipState; activeChallenge?: Challenge | null; decision?: TurnDecision; characterPlan?: CharacterPlan; challengeSelection?: ChallengeSelection | null; presenceDecision?: PresenceDecision | null; memories?: RankedMemoryItem[]; recentHumor?: string[]; processCaptures?: ProcessCapture[]; processInsights?: ProcessInsight[]; selectedRivalMemory?: SelectedMemory | null; selectedInsight?: SelectedInsight | null; agencyDecision?: RivalInitiativeDecision | null; rivalLivingState?: RivalLivingState | null; }
+export interface BuildPromptContext { userInput: string; relationship: RelationshipState; activeChallenge?: Challenge | null; decision?: TurnDecision; characterPlan?: CharacterPlan; challengeSelection?: ChallengeSelection | null; presenceDecision?: PresenceDecision | null; memories?: RankedMemoryItem[]; recentHumor?: string[]; processCaptures?: ProcessCapture[]; processInsights?: ProcessInsight[]; selectedRivalMemory?: SelectedMemory | null; selectedInsight?: SelectedInsight | null; agencyDecision?: RivalInitiativeDecision | null; rivalLivingState?: RivalLivingState | null; interactionOutcome?: InteractionOutcome | null; situationalContext?: RivalSituationalContext | null; }
 
 export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptions {
   const decision = context.decision || { mode: 'banter', humorMechanism: null, target: 'current behavior', callback: null, serious: false, register: 'direct', intensity: 4 } as TurnDecision;
@@ -79,6 +81,18 @@ export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptio
       // Only inject when state is non-trivial — active/watching is the default
       prompt += `RIVAL INTERNAL STATE (context for authentic voice — do not narrate these facts directly):\n- Was: ${ls.internalState} / ${ls.microActivity}\n- Expression: ${ls.expressionMode}${ls.isTransition ? ' (transition — he was just interrupted or returned)' : ''}\n${ls.authorizedAmbientEvent ? `- Ambient event: ${ls.authorizedAmbientEvent}\n` : ''}\n`;
     }
+  }
+  if (context.interactionOutcome?.speechAuthorized) {
+    const io = context.interactionOutcome;
+    prompt += `USER INTERACTION (direct physical interaction — authoritative for this turn):\n- User physically interacted with the Rival\n- Reaction: ${io.reaction}\n- Context: ${io.reason}\nRespond in character as if ${io.reaction === 'startled' ? 'you were just woken up' : io.reaction === 'annoyed' ? 'mildly irritated by the interruption' : io.reaction === 'amused' ? 'you found it a bit amusing' : io.reaction === 'pushback' ? 'fighting back against a roast' : 'you are mildly curious'}. Keep it brief. Do not start a new challenge. Do not alter relationship state.\n\n`;
+  }
+  if (context.situationalContext) {
+    const sit = context.situationalContext;
+    prompt += `SITUATIONAL CONTEXT (Task 29 - specific contextual anchor for this turn):\n- Primary context: ${sit.primaryContext}\n`;
+    if (sit.supportingContexts.length > 0) prompt += `- Supporting context: ${sit.supportingContexts.join(', ')}\n`;
+    if (sit.measurableDetails.length > 0) prompt += `- Measurable details (grounded; do not fabricate): ${sit.measurableDetails.join(' | ')}\n`;
+    if (sit.renderingDirectives.length > 0) prompt += `- Directives: ${sit.renderingDirectives.join(' ')}\n`;
+    prompt += `You MUST follow the rendering directives. Use the measurable details for specificity instead of being generic. Do not invent facts.\n\n`;
   }
   prompt += `DETERMINISTIC RESPONSE PLAN (follow exactly):\n- Mode: ${decision.mode}\n- Serious: ${decision.serious}\n- Register: ${decision.register}\n- Intensity: ${decision.intensity}\n- Humor mechanism: ${decision.humorMechanism || 'none'}\n- Target concept: ${decision.target}\n`;
   if (decision.callback) prompt += `- Grounded callback (use only if useful): [${decision.callback.item.category}] ${decision.callback.item.key}: ${JSON.stringify(decision.callback.item.value)}\n`;

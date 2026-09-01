@@ -1,4 +1,14 @@
 import { supabase } from '../lib/supabase';
+import { deriveProcessInsights, type Challenge, type DomainEvent, type PresenceDecision } from '@ai-rival/domain';
+
+interface EventRow {
+  id: string;
+  user_id: string;
+  event_type: DomainEvent['eventType'];
+  source?: DomainEvent['source'];
+  payload: Record<string, unknown>;
+  created_at: string;
+}
 
 export async function ensureSession() {
   const { data: { session } } = await supabase.auth.getSession();
@@ -19,6 +29,20 @@ export async function chatTurn(userInput: string) {
   await ensureSession();
   const { data, error } = await supabase.functions.invoke('chat-turn', {
     body: { userInput },
+  });
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * An ambient turn is requested only after the browser's deterministic Presence
+ * Engine selected a concrete event. It uses the existing chat-turn function and
+ * does not create a second generation path.
+ */
+export async function ambientTurn(presenceDecision: PresenceDecision) {
+  await ensureSession();
+  const { data, error } = await supabase.functions.invoke('chat-turn', {
+    body: { presenceDecision },
   });
   if (error) throw error;
   return data;
@@ -78,6 +102,29 @@ export async function checkJudgment(challengeId: string) {
   const { data, error } = await supabase.from('judgments').select('*').eq('challenge_id', challengeId).order('created_at', { ascending: false }).limit(1).maybeSingle();
   if (error) throw error;
   return data;
+}
+
+/** A single, post-judgment read of the immutable ledger; this does not call AI. */
+export async function getGroundedProcessInsight(challenge: Challenge): Promise<string | null> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+  const { data, error } = await supabase
+    .from('events')
+    .select('*')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: true })
+    .limit(50);
+  if (error) throw error;
+
+  const events: DomainEvent[] = ((data || []) as EventRow[]).map((event) => ({
+    id: event.id,
+    userId: event.user_id,
+    eventType: event.event_type,
+    source: event.source || 'system',
+    payload: event.payload,
+    createdAt: event.created_at,
+  }));
+  return deriveProcessInsights(challenge, events)[0]?.description || null;
 }
 
 export async function recordProcessCapture(challengeId: string, captureType: 'process_signal' | 'process_thought', opts: { signal?: string; content?: string } = {}) {
