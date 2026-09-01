@@ -8,16 +8,20 @@ import type { SelectedInsight } from './rivalInsightSelector.js';
 import type { ProcessInsight } from './processInsights.js';
 
 export type InitiativeCategory =
-  | 'RETURN_GREETING'
-  | 'WAKE'
-  | 'IDLE_OBSERVATION'
-  | 'BORED_REACTION'
+  | 'RETURN_REMARK'
+  | 'WAKE_REMARK'
   | 'UNRESOLVED_FOLLOWUP'
   | 'CALLBACK_INTERRUPTION'
   | 'CHALLENGE_PROVOCATION'
   | 'USER_ROAST_RESPONSE'
   | 'USER_INTERACTION_REACTION'
   | 'RARE_CHARACTER_EVENT'
+  | 'FICTIONAL_INTERRUPTION'
+  | 'IDLE_REMARK'
+  | 'SELF_AMUSEMENT'
+  | 'MILD_IMPATIENCE'
+  | 'ABORTED_THOUGHT'
+  | 'OBSERVATIONAL_INTERRUPTION'
   | 'QUIET';
 
 export interface RivalInitiativeDecision {
@@ -32,6 +36,8 @@ export interface RivalInitiativeDecision {
   cooldownKey: string | null;
 }
 
+import type { RivalInteractionHook } from './rivalLivingState.js';
+
 export interface AgencyInput {
   allEvents: readonly DomainEvent[];
   userInput: string;
@@ -43,6 +49,7 @@ export interface AgencyInput {
   selectedInsight: SelectedInsight | null;
   processInsights: readonly ProcessInsight[];
   recentInitiatives: readonly DomainEvent[]; // events where we executed an initiative
+  interactionHook?: RivalInteractionHook | null;
   nowIso: string;
 }
 
@@ -117,7 +124,7 @@ export function deriveAgencyDecision(input: AgencyInput): RivalInitiativeDecisio
   // 1. PRESENCE-DRIVEN: RETURN / WAKE
   if (input.presence.action === 'return_greeting') {
     candidates.push({
-      action: 'RETURN_GREETING',
+      action: 'RETURN_REMARK',
       priority: AGENCY_PRIORITIES.RETURN_WAKE,
       reason: 'User returned after meaningful absence.',
       sourceEventIds: input.presence.sourceEventIds,
@@ -129,7 +136,7 @@ export function deriveAgencyDecision(input: AgencyInput): RivalInitiativeDecisio
     });
   } else if (input.presence.action === 'sleep_end' || input.presence.action === 'unexpected_wake') {
     candidates.push({
-      action: 'WAKE',
+      action: 'WAKE_REMARK',
       priority: AGENCY_PRIORITIES.RETURN_WAKE,
       reason: 'Rival woke up.',
       sourceEventIds: input.presence.sourceEventIds,
@@ -157,8 +164,27 @@ export function deriveAgencyDecision(input: AgencyInput): RivalInitiativeDecisio
   }
 
   // 3. USER-DIRECTED: INTERACTION HOOK (tap, poke, etc. mapped via presence opportunity/action)
-  // We assume this might come through a future event type, but for now we look at presence.action === 'idle_reaction' combined with interaction?
-  // Let's rely on userInput to determine explicit touches in the future, or specific presence states.
+  if (input.interactionHook) {
+    let urgency: RivalInitiativeDecision['urgency'] = 'medium';
+    let interactionMode: CharacterPlan['interactionMode'] = 'banter';
+    if (input.interactionHook === 'poke' || input.interactionHook === 'interrupt') {
+      interactionMode = 'pushback';
+    } else if (input.interactionHook === 'wake') {
+      interactionMode = 'observation';
+    }
+    
+    candidates.push({
+      action: 'USER_INTERACTION_REACTION',
+      priority: AGENCY_PRIORITIES.USER_INTERACTION,
+      reason: `User explicitly interacted via ${input.interactionHook}.`,
+      sourceEventIds: [],
+      sourceMemoryKeys: [],
+      sourceInsightKeys: [],
+      requestedInteractionMode: interactionMode,
+      urgency,
+      cooldownKey: null, // explicit interaction always works
+    });
+  }
 
   // 4. UNRESOLVED FOLLOWUP (e.g. unresolved memory exists, and we are not doing anything else)
   if (input.selectedMemory && input.selectedMemory.memory.type === 'unresolved' && !input.activeChallenge && !input.userInput) {
@@ -213,7 +239,7 @@ export function deriveAgencyDecision(input: AgencyInput): RivalInitiativeDecisio
   // 6. MEANINGFUL OBSERVATION (Idle Observation)
   if (!input.userInput && input.presence.action === 'idle_reaction') {
     candidates.push({
-      action: 'IDLE_OBSERVATION',
+      action: 'OBSERVATIONAL_INTERRUPTION',
       priority: AGENCY_PRIORITIES.MEANINGFUL_OBSERVATION,
       reason: 'User has been idle or stalled for a while.',
       sourceEventIds: input.presence.sourceEventIds,
@@ -221,23 +247,28 @@ export function deriveAgencyDecision(input: AgencyInput): RivalInitiativeDecisio
       sourceInsightKeys: [],
       requestedInteractionMode: 'question',
       urgency: 'low',
-      cooldownKey: 'idle_observation',
+      cooldownKey: 'observational_interruption',
     });
   }
 
   // 7. BOREDOM / IDLE
   if (!input.userInput && input.presence.state === 'bored') {
-    if (getRecentInitiatives(input, 'BORED_REACTION', 60 * 60 * 1000) === 0) {
+    if (getRecentInitiatives(input, 'IDLE_REMARK', 60 * 60 * 1000) === 0 && getRecentInitiatives(input, 'MILD_IMPATIENCE', 60 * 60 * 1000) === 0) {
+      // Rotate between a few bored categories
+      const randSeed = new Date(input.nowIso).getTime();
+      const options: InitiativeCategory[] = ['IDLE_REMARK', 'MILD_IMPATIENCE'];
+      const action = options[randSeed % options.length];
+      
       candidates.push({
-        action: 'BORED_REACTION',
+        action,
         priority: AGENCY_PRIORITIES.BOREDOM_IDLE,
-        reason: 'Rival is bored.',
+        reason: `Rival is bored. Selected ${action}.`,
         sourceEventIds: [],
         sourceMemoryKeys: [],
         sourceInsightKeys: [],
         requestedInteractionMode: 'observation',
         urgency: 'low',
-        cooldownKey: 'boredom',
+        cooldownKey: action.toLowerCase(),
       });
     }
   }
@@ -245,8 +276,13 @@ export function deriveAgencyDecision(input: AgencyInput): RivalInitiativeDecisio
   // 8. RARE CHARACTER EVENT
   if (!input.userInput && input.presence.action === 'rare_character_event') {
     if (getRecentInitiatives(input, 'RARE_CHARACTER_EVENT', 4 * 60 * 60 * 1000) === 0) {
+      // Pick one of the new rare character events
+      const randSeed = new Date(input.nowIso).getTime();
+      const options: InitiativeCategory[] = ['RARE_CHARACTER_EVENT', 'FICTIONAL_INTERRUPTION', 'SELF_AMUSEMENT', 'ABORTED_THOUGHT'];
+      const action = options[randSeed % options.length];
+
       candidates.push({
-        action: 'RARE_CHARACTER_EVENT',
+        action,
         priority: AGENCY_PRIORITIES.RARE_EVENT,
         reason: 'A low-frequency character quirk or lore event.',
         sourceEventIds: input.presence.sourceEventIds,

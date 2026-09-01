@@ -84,10 +84,10 @@ describe('RivalAgency', () => {
     expect(dec.priority).toBe(AGENCY_PRIORITIES.QUIET);
   });
 
-  it('translates presence return_greeting to RETURN_GREETING', () => {
+  it('translates presence return_greeting to RETURN_REMARK', () => {
     const presence = { ...basePresence, action: 'return_greeting' as const };
     const dec = deriveAgencyDecision({ ...baseInput, presence });
-    expect(dec.action).toBe('RETURN_GREETING');
+    expect(dec.action).toBe('RETURN_REMARK');
     expect(dec.priority).toBe(AGENCY_PRIORITIES.RETURN_WAKE);
   });
 
@@ -145,10 +145,11 @@ describe('RivalAgency', () => {
     expect(dec2.action).toBe('QUIET');
   });
 
-  it('emits RARE_CHARACTER_EVENT when authorized by presence', () => {
+  it('emits a rare character event when authorized by presence', () => {
     const presence = { ...basePresence, action: 'rare_character_event' as const };
     const dec = deriveAgencyDecision({ ...baseInput, presence });
-    expect(dec.action).toBe('RARE_CHARACTER_EVENT');
+    const expected = ['RARE_CHARACTER_EVENT', 'FICTIONAL_INTERRUPTION', 'SELF_AMUSEMENT', 'ABORTED_THOUGHT'];
+    expect(expected).toContain(dec.action);
     expect(dec.priority).toBe(AGENCY_PRIORITIES.RARE_EVENT);
   });
 
@@ -157,6 +158,12 @@ describe('RivalAgency', () => {
     const presence = { ...basePresence, action: 'return_greeting' as const };
     const dec = deriveAgencyDecision({ ...baseInput, presence, userInput: 'idiot' });
     // RETURN_WAKE (80) > USER_INTERACTION (70)
-    expect(dec.action).toBe('RETURN_GREETING');
+    expect(dec.action).toBe('RETURN_REMARK');
+  });
+
+  it('routes interaction hooks correctly', () => {
+    const dec = deriveAgencyDecision({ ...baseInput, interactionHook: 'poke' });
+    expect(dec.action).toBe('USER_INTERACTION_REACTION');
+    expect(dec.requestedInteractionMode).toBe('pushback');
   });
 });

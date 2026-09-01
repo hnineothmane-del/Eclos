@@ -15,7 +15,7 @@ import { selectRivalMemory, type SelectedMemory } from './rivalMemorySelector.js
 import { deriveRivalInsights, type RivalInsight } from './rivalInsights.js';
 import { selectRivalInsight, type SelectedInsight } from './rivalInsightSelector.js';
 import { deriveAgencyDecision, type RivalInitiativeDecision } from './rivalAgency.js';
-import { deriveRivalLivingState, type RivalLivingState } from './rivalLivingState.js';
+import { deriveRivalLivingState, type RivalLivingState, type RivalInteractionHook } from './rivalLivingState.js';
 
 const RESPONSE_MODES = ['roast', 'observational_roast', 'challenge', 'judgment', 'grudging_praise', 'serious', 'supportive', 'banter', 'bored', 'curious', 'help', 'meta_rejection'] as const;
 const HUMOR_MECHANISMS = ['deadpan', 'mock_formal', 'absurd_escalation', 'observational', 'contextual_roast', 'callback', 'running_joke', 'irony', 'sarcasm', 'wit', 'nonsense', 'anti_climax', 'self_aware', 'self_deprecation', 'unexpected_praise', 'strategic_silence'] as const;
@@ -32,7 +32,7 @@ export interface ProcessCapture {
   timestamp: string;
 }
 
-export interface PlanTurnOptions { userId: string; userInput: string; activeChallenge?: Challenge | null; presenceDecision?: PresenceDecision | null; }
+export interface PlanTurnOptions { userId: string; userInput: string; activeChallenge?: Challenge | null; presenceDecision?: PresenceDecision | null; processCaptures?: ProcessCapture[]; interactionHook?: RivalInteractionHook; }
 export interface AmbientTurnOptions { userId: string; presenceDecision: PresenceDecision; activeChallenge?: Challenge | null; }
 export interface PlanTurnDependencies { modelRouter: ModelRouter; relationshipStore: IRelationshipStateStore; memoryStore: IMemoryStore; humorStore: IHumorStateStore; eventStore?: import('../store/index.js').IEventStore; }
 export interface PlannedResponse extends AIResponseContract { challengeSelection?: ChallengeSelection | null; }

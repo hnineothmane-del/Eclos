@@ -116,7 +116,7 @@ describe('deriveRivalLivingState', () => {
   // ─── Expression mode ───────────────────────────────────────────────────────
 
   it('sets expressionMode=speaking when agency has non-QUIET action', () => {
-    const agency = mkAgency('RETURN_GREETING');
+    const agency = mkAgency('RETURN_REMARK');
     const state = deriveRivalLivingState(mkPresence({ state: 'returning', activity: 'returning' }), agency, NOW);
     expect(state.expressionMode).toBe('speaking');
   });
@@ -182,7 +182,7 @@ describe('deriveRivalLivingState', () => {
   });
 
   it('describes a speaking state', () => {
-    const agency = mkAgency('WAKE');
+    const agency = mkAgency('WAKE_REMARK');
     const state = deriveRivalLivingState(mkPresence({ state: 'awakening', activity: 'thinking', action: 'sleep_end' }), agency, NOW);
     const desc = describeLivingState(state);
     expect(desc).toContain('returning');
