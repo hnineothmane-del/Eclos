@@ -1,4 +1,4 @@
-﻿/**
+/**
  * rivalSituationalContext.ts — Rival Situational Humor & Contextual Reaction Engine (Task 29)
  *
  * Deterministically classifies the current turn into reaction opportunities.
@@ -19,6 +19,7 @@ import type { SelectedMemory } from './rivalMemorySelector.js';
 import type { RivalInitiativeDecision } from './rivalAgency.js';
 import type { InteractionOutcome } from './rivalInteraction.js';
 import type { CharacterPlan } from './characterDirector.js';
+import type { RivalSessionContinuity } from './rivalSessionContinuity.js';
 
 export type ContextCategory =
   // Challenge / Work specific
@@ -30,6 +31,7 @@ export type ContextCategory =
   | 'prolonged_inactivity'
   | 'fast_completion'
   | 'slow_completion'
+  | 'process_observation'
   // Social / Interaction
   | 'user_roast'
   | 'direct_interaction'
@@ -65,6 +67,7 @@ export interface SituationalContextInput {
   interactionOutcome: InteractionOutcome | null;
   characterPlan: CharacterPlan;
   nowIso: string;
+  continuity?: RivalSessionContinuity | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -93,6 +96,7 @@ export function deriveSituationalContext(input: SituationalContextInput): RivalS
     agencyDecision,
     interactionOutcome,
     characterPlan,
+    continuity,
   } = input;
 
   const isSerious = characterPlan.state.seriousness >= 7;
@@ -237,6 +241,16 @@ export function deriveSituationalContext(input: SituationalContextInput): RivalS
   if (!primaryContext && userInput && isSocialInput(userInput) && !activeChallenge) {
     primaryContext = 'social_exchange';
     renderingDirectives.push('User is engaging in casual conversation. Respond in character without forcing a challenge.');
+  }
+
+  // Continuity is supporting context only: it must never turn casual return
+  // into a productivity intervention or override stronger current evidence.
+  if (continuity && continuity.continuityType !== 'new_session' && continuity.continuityType !== 'new_context') {
+    for (const id of continuity.sourceEventIds) sourceEventIds.add(id);
+    if (!primaryContext && continuity.continuityType === 'returned_after_absence') primaryContext = 'return_after_absence';
+    if (continuity.activeThread && !isSocialInput(userInput)) {
+      renderingDirectives.push('An unfinished thread is available as continuity context; mention it only if natural for the current turn.');
+    }
   }
 
   // Fallback
