@@ -9,9 +9,11 @@ vi.mock('./lib/api', () => ({
   chatTurn: vi.fn(),
   ambientTurn: vi.fn(),
   rivalInteraction: vi.fn(),
-  acceptChallenge: vi.fn(),
+  acceptChallenge: vi.fn((id: string) => Promise.resolve({ id, status: 'accepted', title: 'Do 10 pushups', parameters: { domain: 'fitness' } })),
+  startChallenge: vi.fn((id: string) => Promise.resolve({ id, status: 'started', title: 'Do 10 pushups', parameters: { domain: 'fitness' } })),
+  attemptChallenge: vi.fn((id: string) => Promise.resolve({ id, status: 'attempted', title: 'Do 10 pushups', parameters: { domain: 'fitness' } })),
   declineChallenge: vi.fn(),
-  submitEvidence: vi.fn(),
+  submitEvidence: vi.fn(() => Promise.resolve({ submission: { id: 's1' }, challenge: { id: 'c1', status: 'evidence_submitted' } })),
   checkJudgment: vi.fn(),
   getGroundedProcessInsight: vi.fn()
 }));
@@ -76,14 +78,9 @@ describe('HomePage First-Session Vertical Slice', () => {
   });
 
   it('challenge appears from real returned state and controls are accessible', async () => {
-    (api.chatTurn as any).mockResolvedValue({ response: 'Here is a challenge' });
-    
-    // Override supabase mock to return a challenge
-    const { supabase } = await import('./lib/supabase');
-    (supabase.from as any) = () => ({
-      select: () => ({ eq: () => ({ in: () => ({ order: () => ({
-        limit: () => Promise.resolve({ data: [{ id: 'c1', title: 'Do 10 pushups', difficulty: 5, status: 'issued' }] })
-      }) }) }) })
+    (api.chatTurn as any).mockResolvedValue({
+      response: 'Here is a challenge',
+      challenge: { id: 'c1', title: 'Do 10 pushups', difficulty: 5, status: 'issued' }
     });
 
     render(<HomePage />);
@@ -100,12 +97,9 @@ describe('HomePage First-Session Vertical Slice', () => {
   });
 
   it('active challenge renders correctly and proof submission flow works', async () => {
-    (api.chatTurn as any).mockResolvedValue({ response: 'Challenge' });
-    const { supabase } = await import('./lib/supabase');
-    (supabase.from as any) = () => ({
-      select: () => ({ eq: () => ({ in: () => ({ order: () => ({
-        limit: () => Promise.resolve({ data: [{ id: 'c1', title: 'Do 10 pushups', difficulty: 5, status: 'issued' }] })
-      }) }) }) })
+    (api.chatTurn as any).mockResolvedValue({
+      response: 'Challenge',
+      challenge: { id: 'c1', title: 'Do 10 pushups', difficulty: 5, status: 'issued' }
     });
 
     render(<HomePage />);
@@ -118,9 +112,20 @@ describe('HomePage First-Session Vertical Slice', () => {
     await waitFor(() => {
       expect(api.acceptChallenge).toHaveBeenCalledWith('c1');
       expect(screen.getByText('ACTIVE CHALLENGE')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /START WORK/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /START WORK/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /LOG ATTEMPT/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /LOG ATTEMPT/i }));
+    await waitFor(() => {
       expect(screen.getByText('RIVAL LENS')).toBeInTheDocument();
       expect(screen.getByLabelText(/Rival Lens thought input/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Send signal: STUCK' })).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/Submit your proof/i)).toBeInTheDocument();
     });
 
     const proofInput = screen.getByPlaceholderText(/Submit your proof/i);
@@ -150,16 +155,15 @@ describe('HomePage First-Session Vertical Slice', () => {
     // Short circuit to JUDGMENT state
     // We'll just test that clicking continue on judgment shows preservation
     // I can't easily set state, so I'll trigger it through the flow
-    (api.chatTurn as any).mockResolvedValue({});
-    const { supabase } = await import('./lib/supabase');
-    (supabase.from as any) = () => ({
-      select: () => ({ eq: () => ({ in: () => ({ order: () => ({
-        limit: () => Promise.resolve({ data: [{ id: 'c1', title: 'X', difficulty: 5, status: 'issued' }] })
-      }) }) }) })
+    (api.chatTurn as any).mockResolvedValue({
+      response: 'X',
+      challenge: { id: 'c1', title: 'X', difficulty: 5, status: 'issued' }
     });
 
     fireEvent.click(screen.getByText('Get in shape'));
     await waitFor(() => fireEvent.click(screen.getByRole('button', { name: /ACCEPT/i })));
+    await waitFor(() => fireEvent.click(screen.getByRole('button', { name: /START WORK/i })));
+    await waitFor(() => fireEvent.click(screen.getByRole('button', { name: /LOG ATTEMPT/i })));
     
     await waitFor(() => {
       const proofInput = screen.getByPlaceholderText(/Submit your proof/i);

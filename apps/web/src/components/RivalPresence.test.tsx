@@ -5,8 +5,8 @@ import type { Challenge, PresenceDecision, PresenceVisualState } from '@ai-rival
 import { RivalPresence } from './RivalPresence';
 import { useRivalPresence } from './useRivalPresence';
 
-function PresenceHarness({ activeChallenge = null, serious = false, onAmbientEvent, onPresenceInteraction }: { activeChallenge?: Challenge | null; serious?: boolean; onAmbientEvent?: (decision: PresenceDecision) => void; onPresenceInteraction?: (interaction: 'touch' | 'tap' | 'poke' | 'wake' | 'interrupt' | 'user_roast' | 'user_challenge', decision: PresenceDecision) => void }) {
-  const presence = useRivalPresence({ activeChallenge, serious, onAmbientEvent, onPresenceInteraction });
+function PresenceHarness({ activeChallenge = null, serious = false, relationship, onAmbientEvent, onPresenceInteraction }: { activeChallenge?: Challenge | null; serious?: boolean; relationship?: any; onAmbientEvent?: (decision: PresenceDecision) => void; onPresenceInteraction?: (interaction: 'touch' | 'tap' | 'poke' | 'wake' | 'interrupt' | 'user_roast' | 'user_challenge', decision: PresenceDecision) => void }) {
+  const presence = useRivalPresence({ activeChallenge, serious, relationship, onAmbientEvent, onPresenceInteraction });
   return (
     <>
       <RivalPresence visual={presence.visual} onPresenceInteraction={presence.recordInteraction} />
@@ -99,8 +99,11 @@ describe('RivalPresence runtime', () => {
   it('surfaces one rare life opportunity after quiet boredom and does not request prose for sleep', () => {
     vi.useFakeTimers();
     const ambient = vi.fn();
-    render(<PresenceHarness onAmbientEvent={ambient} />);
-    act(() => vi.advanceTimersByTime(18 * 60 * 1000));
+    render(<PresenceHarness relationship={{ userId: 'runtime', respect: 0, warmth: 0, trust: 0, rivalry: 0, familiarity: 40, curiosity: 0, mode: 'adaptive', updatedAt: '' }} onAmbientEvent={ambient} />);
+    act(() => vi.advanceTimersByTime(2 * 60 * 1000));
+    act(() => vi.advanceTimersByTime(4 * 60 * 1000));
+    act(() => vi.advanceTimersByTime(6 * 60 * 1000));
+    act(() => vi.advanceTimersByTime(6 * 60 * 1000));
     expect(ambient).toHaveBeenCalledTimes(1);
     expect(ambient.mock.calls[0][0]).toMatchObject({ action: 'rare_character_event', state: 'bored' });
 

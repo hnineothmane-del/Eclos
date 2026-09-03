@@ -58,9 +58,13 @@ serve(async (req) => {
     if (!supabaseUrl || !anonKey || !serviceRoleKey || !geminiApiKey || !authHeader) return json({ error: 'Unauthorized' }, 401);
 
     const tAuthStart = performance.now();
+    const token = authHeader.replace(/^Bearer\s+/i, '');
     const authClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
-    const { data: { user }, error: authError } = await authClient.auth.getUser();
-    if (authError || !user) return json({ error: 'Unauthorized' }, 401);
+    const { data: { user }, error: authError } = await authClient.auth.getUser(token);
+    if (authError || !user) {
+      console.warn('Auth failed in chat-turn:', authError?.message);
+      return json({ error: 'Unauthorized' }, 401);
+    }
     const tAuthEnd = performance.now();
 
     const body = await req.json();

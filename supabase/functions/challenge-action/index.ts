@@ -18,9 +18,13 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization');
     if (!supabaseUrl || !anonKey || !serviceRoleKey || !authHeader) return json({ error: 'Unauthorized' }, 401);
 
+    const token = authHeader.replace(/^Bearer\s+/i, '');
     const authClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
-    const { data: { user }, error: authError } = await authClient.auth.getUser();
-    if (authError || !user) return json({ error: 'Unauthorized' }, 401);
+    const { data: { user }, error: authError } = await authClient.auth.getUser(token);
+    if (authError || !user) {
+      console.warn('Auth failed in challenge-action:', authError?.message);
+      return json({ error: 'Unauthorized' }, 401);
+    }
 
     const body = await req.json();
     const { action, challengeId, params } = body;

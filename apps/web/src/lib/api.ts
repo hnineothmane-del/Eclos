@@ -11,24 +11,49 @@ interface EventRow {
 }
 
 export async function ensureSession() {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session) {
-    // If no session, create anonymous user
-    const { data, error } = await supabase.auth.signInAnonymously();
-    if (error) {
-      console.warn('Anonymous sign-in not supported or failed, attempting custom flow', error);
-      // Fallback or handle differently if anon is disabled
-      throw error;
+  let { data: { session } } = await supabase.auth.getSession();
+
+  // If a session exists in localStorage, verify the user still exists in DB
+  if (session) {
+    const isExpired = session.expires_at ? (session.expires_at * 1000 <= Date.now() + 60000) : false;
+    if (isExpired) {
+      const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+      if (refreshError || !refreshData.session) {
+        await supabase.auth.signOut().catch(() => {});
+        session = null;
+      } else {
+        session = refreshData.session;
+      }
     }
-    return data.session;
+  }
+
+  if (session) {
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
+      // Stale session (e.g. after local supabase db reset)
+      await supabase.auth.signOut().catch(() => {});
+      session = null;
+    }
+  }
+
+  if (!session) {
+    const { data, error } = await supabase.auth.signInAnonymously();
+    if (error || !data.session) {
+      console.warn('Anonymous sign-in not supported or failed', error);
+      throw error || new Error('Failed to create anonymous session');
+    }
+    session = data.session;
   }
   return session;
 }
 
 export async function chatTurn(userInput: string) {
-  await ensureSession();
+  const session = await ensureSession();
   const { data, error } = await supabase.functions.invoke('chat-turn', {
     body: { userInput },
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
   });
   if (error) throw error;
   return data;
@@ -40,61 +65,84 @@ export async function chatTurn(userInput: string) {
  * does not create a second generation path.
  */
 export async function ambientTurn(presenceDecision: PresenceDecision) {
-  await ensureSession();
+  const session = await ensureSession();
   const { data, error } = await supabase.functions.invoke('chat-turn', {
     body: { presenceDecision },
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
   });
   if (error) throw error;
   return data;
 }
 
 export async function rivalInteraction(interactionHook: PresenceInteraction, presenceDecision: PresenceDecision) {
-  await ensureSession();
-  const { data, error } = await supabase.functions.invoke('chat-turn', { body: { interactionHook, presenceDecision } });
+  const session = await ensureSession();
+  const { data, error } = await supabase.functions.invoke('chat-turn', {
+    body: { interactionHook, presenceDecision },
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
+  });
   if (error) throw error;
   return data;
 }
 
 export async function acceptChallenge(challengeId: string) {
-  await ensureSession();
+  const session = await ensureSession();
   const { data, error } = await supabase.functions.invoke('challenge-action', {
-    body: { action: 'accept', challengeId }
+    body: { action: 'accept', challengeId },
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
   });
   if (error) throw error;
   return data;
 }
 
 export async function startChallenge(challengeId: string) {
-  await ensureSession();
+  const session = await ensureSession();
   const { data, error } = await supabase.functions.invoke('challenge-action', {
-    body: { action: 'start', challengeId }
+    body: { action: 'start', challengeId },
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
   });
   if (error) throw error;
   return data;
 }
 
 export async function attemptChallenge(challengeId: string) {
-  await ensureSession();
+  const session = await ensureSession();
   const { data, error } = await supabase.functions.invoke('challenge-action', {
-    body: { action: 'attempt', challengeId }
+    body: { action: 'attempt', challengeId },
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
   });
   if (error) throw error;
   return data;
 }
 
 export async function declineChallenge(challengeId: string) {
-  await ensureSession();
+  const session = await ensureSession();
   const { data, error } = await supabase.functions.invoke('challenge-action', {
-    body: { action: 'decline', challengeId }
+    body: { action: 'decline', challengeId },
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
   });
   if (error) throw error;
   return data;
 }
 
 export async function submitEvidence(challengeId: string, content: string) {
-  await ensureSession();
+  const session = await ensureSession();
   const { data, error } = await supabase.functions.invoke('challenge-action', {
-    body: { action: 'submit_evidence', challengeId, params: { content } }
+    body: { action: 'submit_evidence', challengeId, params: { content } },
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
   });
   if (error) throw error;
   return data.data; // { submission, challenge }

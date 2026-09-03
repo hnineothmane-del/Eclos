@@ -170,7 +170,7 @@ export function useRivalPresence({ activeChallenge = null, serious = false, rela
     if (nextThreshold === null) return;
     const timeout = window.setTimeout(() => resolve('idle'), Math.max(0, nextThreshold - idleFor));
     return () => window.clearTimeout(timeout);
-  }, [decision.state, resolve]);
+  }, [decision, resolve]);
 
   return { decision, visual: toPresenceVisualState(decision), recordInteraction, markMeaningfulActivity };
 }
