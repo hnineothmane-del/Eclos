@@ -1,5 +1,7 @@
 import type { Challenge } from '../types/challenge.js';
 import type { RelationshipState } from '../types/relationship.js';
+import type { VerifiedExternalContext } from './liveContext.js';
+export type { VerifiedExternalContext } from './liveContext.js';
 
 export type PresenceState =
   | 'active'
@@ -23,12 +25,6 @@ export type PresenceInteraction = 'touch' | 'tap' | 'poke' | 'wake' | 'interrupt
 export type PresenceReason = 'serious_context' | 'challenge_critical' | 'user_returned' | 'long_absence' | 'long_idle' | 'user_stalled' | 'unusual_event' | 'cooldown' | 'no_worthy_event';
 
 /** Reserved for a future verified information adapter. Never browser-provided. */
-export interface VerifiedExternalContext {
-  source: string;
-  timestamp: string;
-  summary: string;
-}
-
 export interface AmbientEventRecord {
   type: AmbientEventType;
   occurredAt: string;
@@ -79,6 +75,9 @@ export const PRESENCE_TIMING = {
   IDLE_MS: 2 * 60 * 1000,
   OBSERVE_MS: 6 * 60 * 1000,
   BORED_MS: 12 * 60 * 1000,
+  // A rare life moment can be considered only after the Rival has already
+  // been silently bored for a while. It remains subject to the session budget.
+  AMBIENT_LIFE_MS: 18 * 60 * 1000,
   REST_MS: 20 * 60 * 1000,
   SLEEP_MS: 30 * 60 * 1000,
   AWAY_MS: 30 * 60 * 1000,
@@ -86,7 +85,9 @@ export const PRESENCE_TIMING = {
   MAX_SESSION_AMBIENT_EVENTS: 1,
 } as const;
 
-const challengeCriticalStatuses = new Set(['evidence_submitted', 'needs_more_evidence']);
+// The presence layer may remain visible during challenge work, but spontaneous
+// speech must never compete with it.
+const challengeProtectedStatuses = new Set(['accepted', 'started', 'attempted', 'evidence_submitted', 'needs_more_evidence']);
 
 function elapsedMs(from: string, to: string): number {
   const start = new Date(from).getTime();
@@ -148,7 +149,7 @@ export function toPresenceVisualState(decision: PresenceDecision): PresenceVisua
 export function resolvePresence(input: PresenceInput): PresenceDecision {
   const idleElapsed = elapsedMs(input.lastUserInteractionAt, input.currentTimeIso);
   const serious = (input.seriousness || 0) >= 7 || input.opportunity === 'serious_context';
-  const criticalChallenge = !!input.activeChallenge && challengeCriticalStatuses.has(input.activeChallenge.status);
+  const criticalChallenge = !!input.activeChallenge && challengeProtectedStatuses.has(input.activeChallenge.status);
 
   if (serious) return decision(input, 'serious', 'watching', 'ignore', null, 'serious_context');
   if (criticalChallenge) return decision(input, 'active', 'watching', 'ignore', null, 'challenge_critical');
@@ -180,7 +181,16 @@ export function resolvePresence(input: PresenceInput): PresenceDecision {
     return decision(input, 'sleeping', 'sleeping', 'ignore', action, action ? 'long_idle' : 'cooldown');
   }
   if (idleElapsed >= PRESENCE_TIMING.REST_MS) return decision(input, 'resting', 'resting', 'ignore', null, 'long_idle');
-  if (idleElapsed >= PRESENCE_TIMING.BORED_MS) return decision(input, 'bored', 'waiting', 'observe', null, 'long_idle');
+  if (idleElapsed >= PRESENCE_TIMING.BORED_MS) {
+    // A single, sparse opportunity for character life after a long quiet spell.
+    // The Agency remains responsible for deciding whether it is worth speaking.
+    const action = idleElapsed >= PRESENCE_TIMING.AMBIENT_LIFE_MS
+      && input.relationship.familiarity >= 35
+      && mayEmit(input, 'rare_character_event')
+      ? 'rare_character_event'
+      : null;
+    return decision(input, 'bored', 'waiting', 'observe', action, action ? 'long_idle' : 'no_worthy_event');
+  }
   if (idleElapsed >= PRESENCE_TIMING.OBSERVE_MS) {
     const shouldInterrupt = input.opportunity === 'user_stalled' && input.relationship.familiarity >= 35 && input.relationship.trust >= 30;
     const action = shouldInterrupt && mayEmit(input, 'idle_reaction') ? 'idle_reaction' : null;

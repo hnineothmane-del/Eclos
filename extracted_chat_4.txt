@@ -1,0 +1,21 @@
+Created At: 2026-08-29T15:46:04+01:00
+Completed At: 2026-08-29T15:46:04+01:00
+
+The command exited with code 0.
+Output:
+commit 7b030b294c8589c789f9eabc5fb089740a270c3e
+Author: Othmane <othmane@monkcopy.com>
+Date:   Sat Aug 29 15:45:55 2026 +0100
+
+    feat: implement response planner and character prompts
+
+ packages/domain/src/ai/index.ts                    |   2 +
+ .../domain/src/ai/prompts/characterSystemPrompt.ts |  50 +++++++
+ .../domain/src/ai/prompts/promptBuilder.test.ts    | 121 ++++++++++++++++
+ packages/domain/src/ai/prompts/promptBuilder.ts    |  66 +++++++++
+ packages/domain/src/engine/index.ts                |   1 +
+ packages/domain/src/engine/responsePlanner.test.ts | 156 +++++++++++++++++++++
+ packages/domain/src/engine/responsePlanner.ts      | 100 +++++++++++++
+ supabase/functions/chat-turn/index.ts              |  84 +++++++++++
+ 8 files changed, 580 insertions(+)
+

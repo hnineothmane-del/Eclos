@@ -149,7 +149,18 @@ export class GeminiProvider implements AIProvider {
     }
 
     const obj = data as Record<string, unknown>;
-    const outputText = obj.output_text;
+    const steps = Array.isArray(obj.steps) ? obj.steps : [];
+    const modelOutputStep = [...steps].reverse().find((step): step is Record<string, unknown> => (
+      Boolean(step) && typeof step === 'object' && (step as Record<string, unknown>).type === 'model_output'
+    ));
+    const content = modelOutputStep && Array.isArray(modelOutputStep.content) ? modelOutputStep.content : [];
+    const textBlocks = content
+      .filter((block): block is Record<string, unknown> => (
+        Boolean(block) && typeof block === 'object' && (block as Record<string, unknown>).type === 'text'
+      ))
+      .map((block) => block.text)
+      .filter((text): text is string => typeof text === 'string' && text.trim() !== '');
+    const outputText = textBlocks.length > 0 ? textBlocks.join('') : undefined;
 
     if (typeof outputText !== 'string' || outputText.trim() === '') {
       throw new InvalidStructuredOutputError(
@@ -165,7 +176,6 @@ export class GeminiProvider implements AIProvider {
       model: this.model,
       input: options.prompt,
       generation_config: {
-        response_mime_type: 'application/json',
         temperature: options.temperature,
         max_output_tokens: options.maxTokens,
       },
@@ -202,9 +212,7 @@ Metadata: ${JSON.stringify(options.metadata || {})}`;
       model: this.model,
       system_instruction: systemPrompt,
       input: promptText,
-      generation_config: {
-        response_mime_type: 'application/json',
-      },
+      generation_config: {},
     };
 
     const rawText = await this.executeInteraction(payload);
@@ -237,9 +245,7 @@ Metadata: ${JSON.stringify(options.metadata || {})}`;
           text: promptText,
         },
       ],
-      generation_config: {
-        response_mime_type: 'application/json',
-      },
+      generation_config: {},
     };
 
     const rawText = await this.executeInteraction(payload);

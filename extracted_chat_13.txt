@@ -1,0 +1,27 @@
+Created At: 2026-08-30T02:07:11+01:00
+Completed At: 2026-08-30T02:07:11+01:00
+
+The command exited with code 0.
+Output:
+commit e0354feb6023e7ef0253358c2066bcac8116411a
+Author: Othmane <othmane@monkcopy.com>
+Date:   Sun Aug 30 02:07:07 2026 +0100
+
+    feat: Rival Lens dynamic process capture
+
+ apps/web/src/components/RivalLens.tsx              | 113 +++++++++++++++++++++
+ apps/web/src/lib/api.ts                            |  13 +++
+ apps/web/src/lib/captureProfile.ts                 |  57 +++++++++++
+ apps/web/src/pages/HomePage.tsx                    |   7 ++
+ apps/web/src/styles/home.css                       | 109 ++++++++++++++++++++
+ apps/web/src/types/rivalLens.ts                    |  19 ++++
+ packages/domain/src/ai/prompts/promptBuilder.ts    |  15 ++-
+ .../domain/src/challenge/captureProfile.test.ts    |  39 +++++++
+ packages/domain/src/challenge/captureProfile.ts    |  68 +++++++++++++
+ packages/domain/src/challenge/index.ts             |   1 +
+ packages/domain/src/engine/responsePlanner.test.ts |  24 +++++
+ packages/domain/src/engine/responsePlanner.ts      |  31 +++++-
+ supabase/functions/chat-turn/index.ts              |   6 +-
+ supabase/migrations/0007_process_observation.sql   |  75 ++++++++++++++
+ 14 files changed, 571 insertions(+), 6 deletions(-)
+

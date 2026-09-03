@@ -14,18 +14,29 @@ import type { RivalInitiativeDecision } from '../../engine/rivalAgency.js';
 import type { RivalLivingState } from '../../engine/rivalLivingState.js';
 import type { InteractionOutcome } from '../../engine/rivalInteraction.js';
 import type { RivalSituationalContext } from '../../engine/rivalSituationalContext.js';
+import type { RivalSessionContinuity } from '../../engine/rivalSessionContinuity.js';
+import type { RivalEasterEggDecision } from '../../engine/rivalEasterEgg.js';
+import type { RivalLoreDecision } from '../../engine/rivalLore.js';
+import type { VerifiedExternalContext } from '../../engine/liveContext.js';
+import type { RivalRelationshipContext } from '../../engine/rivalRelationshipContext.js';
 
-export interface BuildPromptContext { userInput: string; relationship: RelationshipState; activeChallenge?: Challenge | null; decision?: TurnDecision; characterPlan?: CharacterPlan; challengeSelection?: ChallengeSelection | null; presenceDecision?: PresenceDecision | null; memories?: RankedMemoryItem[]; recentHumor?: string[]; processCaptures?: ProcessCapture[]; processInsights?: ProcessInsight[]; selectedRivalMemory?: SelectedMemory | null; selectedInsight?: SelectedInsight | null; agencyDecision?: RivalInitiativeDecision | null; rivalLivingState?: RivalLivingState | null; interactionOutcome?: InteractionOutcome | null; situationalContext?: RivalSituationalContext | null; }
+export interface BuildPromptContext { userInput: string; relationship: RelationshipState; activeChallenge?: Challenge | null; decision?: TurnDecision; characterPlan?: CharacterPlan; challengeSelection?: ChallengeSelection | null; presenceDecision?: PresenceDecision | null; memories?: RankedMemoryItem[]; recentHumor?: string[]; processCaptures?: ProcessCapture[]; processInsights?: ProcessInsight[]; selectedRivalMemory?: SelectedMemory | null; selectedInsight?: SelectedInsight | null; agencyDecision?: RivalInitiativeDecision | null; rivalLivingState?: RivalLivingState | null; interactionOutcome?: InteractionOutcome | null; situationalContext?: RivalSituationalContext | null; sessionContinuity?: RivalSessionContinuity | null; easterEgg?: RivalEasterEggDecision | null; lore?: RivalLoreDecision | null; liveContext?: VerifiedExternalContext | null; relationshipContext?: RivalRelationshipContext; }
 
 export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptions {
   const decision = context.decision || { mode: 'banter', humorMechanism: null, target: 'current behavior', callback: null, serious: false, register: 'direct', intensity: 4 } as TurnDecision;
   let prompt = `USER INPUT:\n${context.userInput}\n\n--- CONTEXT ---\nRELATIONSHIP STATE:\n- Mode: ${context.relationship.mode}\n- Respect: ${context.relationship.respect}\n- Warmth: ${context.relationship.warmth}\n- Trust: ${context.relationship.trust}\n- Rivalry: ${context.relationship.rivalry}\n- Familiarity: ${context.relationship.familiarity}\n- Curiosity: ${context.relationship.curiosity}\n\n`;
+  if (context.relationshipContext) {
+    const relation = context.relationshipContext;
+    prompt += `RIVAL RELATIONSHIP CONTEXT (deterministic delivery permissions):\n- Phase: ${relation.phase}\n- Callback depth: ${relation.callbackDepth}/4\n- Teasing warmth: ${relation.teasingWarmth}/10\n- Sincerity permission: ${relation.sincerityPermission}/10\n- Disclosure permission: ${relation.disclosurePermission}/10\n- Challenge respect: ${relation.challengeRespect}/10\n- Roast reciprocity: ${relation.roastReciprocity}/10\n- Nickname eligibility: ${relation.nicknameEligible}\n- Directives: ${relation.directives.join(' ')}\nPreserve the established relationship. Do not become warmer than earned, manufacture attachment, guilt the user for leaving, or alter challenge/relationship state.\n\n`;
+  }
   if (context.activeChallenge) prompt += `ACTIVE CHALLENGE:\n- Objective: ${context.activeChallenge.objective}\n- Status: ${context.activeChallenge.status}\n- Difficulty: ${context.activeChallenge.difficulty}\n- Verification Level: ${context.activeChallenge.verificationLevel}\n- Constraints: ${context.activeChallenge.constraints.join(', ')}\n\n`;
   if (!context.decision && context.memories?.[0]) prompt += `RELEVANT MEMORIES:\n- [${context.memories[0].item.category}] ${context.memories[0].item.key}: ${JSON.stringify(context.memories[0].item.value)}\n\n`;
   if (!context.decision && context.recentHumor?.length) prompt += `RECENT HUMOR LEDGER (Avoid repeating these):\n- ${context.recentHumor.join('\n- ')}\n\n`;
   if (context.processCaptures && context.processCaptures.length > 0) {
     prompt += `RIVAL LENS — PROCESS CAPTURES (user's voluntary signals while working):\n`;
-    for (const capture of context.processCaptures) {
+    // Keep the renderer's working set small; the ledger remains authoritative
+    // while only the most recent observations are useful for this turn.
+    for (const capture of context.processCaptures.slice(-5)) {
       if (capture.captureType === 'process_signal' && capture.signal) {
         prompt += `- [SIGNAL] ${capture.signal} at ${capture.timestamp}\n`;
       } else if (capture.captureType === 'process_thought' && capture.content) {
@@ -36,7 +47,7 @@ export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptio
   }
   if (context.processInsights && context.processInsights.length > 0) {
     prompt += `GROUNDED PROCESS INSIGHTS (Derived deterministically from the user's behavior/events):\n`;
-    for (const insight of context.processInsights) {
+    for (const insight of context.processInsights.slice(0, 3)) {
       prompt += `- ${insight.description}\n`;
     }
     prompt += `These are observations from the challenge record. Do not invent additional facts or infer deep psychological traits from them.\n\n`;
@@ -74,6 +85,9 @@ export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptio
   }
   if (context.agencyDecision && context.agencyDecision.action !== 'QUIET') {
     prompt += `DETERMINISTIC RIVAL INITIATIVE (authoritative for this turn):\n- Action: ${context.agencyDecision.action}\n- Reason: ${context.agencyDecision.reason}\n- Urgency: ${context.agencyDecision.urgency}\n\n`;
+    if (['RARE_CHARACTER_EVENT', 'FICTIONAL_INTERRUPTION', 'SELF_AMUSEMENT', 'ABORTED_THOUGHT', 'IDLE_REMARK', 'MILD_IMPATIENCE'].includes(context.agencyDecision.action)) {
+      prompt += `AMBIENT CHARACTER MOMENT:\nKeep this a brief, optional aside. It is not a productivity intervention: do not issue a challenge, demand a reply, guilt the user, alter work state, or claim real-world activity. The user may ignore it completely.\n\n`;
+    }
   }
   if (context.rivalLivingState) {
     const ls = context.rivalLivingState;
@@ -94,9 +108,31 @@ export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptio
     if (sit.renderingDirectives.length > 0) prompt += `- Directives: ${sit.renderingDirectives.join(' ')}\n`;
     prompt += `You MUST follow the rendering directives. Use the measurable details for specificity instead of being generic. Do not invent facts.\n\n`;
   }
+  if (context.sessionContinuity && context.sessionContinuity.continuityType !== 'new_session' && context.sessionContinuity.continuityType !== 'new_context') {
+    const continuity = context.sessionContinuity;
+    prompt += `RIVAL SESSION CONTINUITY (authoritative, compact history):\n- Continuity: ${continuity.continuityType}\n`;
+    if (continuity.activeThread) prompt += `- Unfinished thread: ${continuity.activeThread.description} (${continuity.activeThread.status})\n`;
+    if (continuity.elapsedSinceMeaningfulActivityMs !== null) prompt += `- Elapsed since meaningful activity (ms): ${continuity.elapsedSinceMeaningfulActivityMs}\n`;
+    if (continuity.recentSequence.length > 0) prompt += `- Recent sequence: ${continuity.recentSequence.join(' → ')}\n`;
+    if (continuity.renderingDirectives.length > 0) prompt += `- Directives: ${continuity.renderingDirectives.join(' ')}\n`;
+    prompt += `Treat continuity facts as authoritative. Do not invent missing history, exact durations, or user actions. Use this naturally; do not recite the packet or pressure the user because time passed.\n\n`;
+  }
+  if (context.easterEgg?.authorized) {
+    prompt += `HIDDEN CHARACTER EVENT (authoritative):\n- The Rival was caught in a private fictional activity.\n- Tone: playful, slightly embarrassed or defensive, self-aware.\n- Do not reveal unsupported lore, claim real-world facts, create persistent facts, explain the Easter egg, or turn this into a productivity intervention.\n\n`;
+  }
+  const lore = context.lore;
+  const fact = lore?.fact;
+  if (lore && fact && lore.revealLevel) {
+    prompt += `RIVAL MICRO-LORE (fictional character canon only):\n- Detail: ${fact.id} (${fact.category})\n- Reveal: ${lore.revealLevel}\n- Canon fragment: ${fact.statement}\n- Reason: ${lore.reason}\nTreat this as fictional Rival context only. Do not invent additional persistent lore, confirm ambiguous origin claims as real facts, explain it unnecessarily, or turn it into exposition. Reveal only what fits naturally.\n\n`;
+  }
+  if (context.liveContext) {
+    const live = context.liveContext;
+    prompt += `VERIFIED LIVE CONTEXT (bounded external information):\n- Context ID: ${live.id}\n- Source: ${live.source}\n- Retrieved at: ${live.retrievedAt}\n- Category: ${live.category}\n- Topic: ${live.title}\n- Summary: ${live.summary}\n- Expires at: ${live.expiresAt ?? 'not specified'}\n- Source URL: ${live.sourceUrl ?? 'not provided'}\nTreat this as verified external context, not memory or Rival lore. Use it only if relevant. Do not invent additional facts, claim you personally browsed, or force it into an unrelated response.\n\n`;
+  } else {
+    prompt += `NO VERIFIED LIVE CONTEXT: Do not claim or imply that you checked current events or know what is happening outside the supplied context.\n\n`;
+  }
   prompt += `DETERMINISTIC RESPONSE PLAN (follow exactly):\n- Mode: ${decision.mode}\n- Serious: ${decision.serious}\n- Register: ${decision.register}\n- Intensity: ${decision.intensity}\n- Humor mechanism: ${decision.humorMechanism || 'none'}\n- Target concept: ${decision.target}\n`;
   if (decision.callback) prompt += `- Grounded callback (use only if useful): [${decision.callback.item.category}] ${decision.callback.item.key}: ${JSON.stringify(decision.callback.item.value)}\n`;
-  prompt += `\n--- INSTRUCTIONS ---\nWrite the best possible response in the selected style. Do not change the selected mode, seriousness, mechanism, or target. Do not invent memories or historical facts. Do not suggest authoritative events. DO NOT supply authoritative numeric relationship state.\n`;
+  prompt += `\n--- INSTRUCTIONS ---\nWrite the best possible response in the selected style. Do not change the selected mode, seriousness, mechanism, or target. Do not invent memories or historical facts. Do not suggest authoritative events. DO NOT supply authoritative numeric relationship state. Use one dominant conversational idea for this turn; supporting context should remain implicit rather than becoming a list or second speech. Preserve the highest-priority situational directive and prefer silence/conciseness over stacking callbacks, insights, lore, ambient life, and live context.\n`;
   return { prompt, systemPrompt: CHARACTER_SYSTEM_PROMPT };
 }
-

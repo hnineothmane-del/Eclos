@@ -1,0 +1,75 @@
+Created At: 2026-09-02T03:41:02+01:00
+Completed At: 2026-09-02T03:41:02+01:00
+
+The command exited with code 0.
+Output:
+On branch main
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   README.md
+	modified:   apps/web/src/HomePage.test.tsx
+	modified:   apps/web/src/components/RivalPresence.test.tsx
+	modified:   apps/web/src/components/RivalPresence.tsx
+	modified:   apps/web/src/components/useRivalPresence.ts
+	modified:   apps/web/src/config/identity.ts
+	modified:   apps/web/src/lib/api.ts
+	modified:   apps/web/src/pages/HomePage.tsx
+	modified:   apps/web/src/styles/home.css
+	modified:   package-lock.json
+	modified:   package.json
+	modified:   packages/domain/src/ai/geminiProvider.test.ts
+	modified:   packages/domain/src/ai/geminiProvider.ts
+	modified:   packages/domain/src/ai/prompts/characterSystemPrompt.ts
+	modified:   packages/domain/src/ai/prompts/promptBuilder.test.ts
+	modified:   packages/domain/src/ai/prompts/promptBuilder.ts
+	modified:   packages/domain/src/engine/characterDirector.test.ts
+	modified:   packages/domain/src/engine/characterDirector.ts
+	modified:   packages/domain/src/engine/index.ts
+	modified:   packages/domain/src/engine/presenceEngine.test.ts
+	modified:   packages/domain/src/engine/presenceEngine.ts
+	modified:   packages/domain/src/engine/responsePlanner.test.ts
+	modified:   packages/domain/src/engine/responsePlanner.ts
+	modified:   packages/domain/src/engine/rivalAgency.test.ts
+	modified:   packages/domain/src/engine/rivalAgency.ts
+	modified:   packages/domain/src/engine/rivalInsights.ts
+	modified:   packages/domain/src/engine/rivalMemory.ts
+	modified:   packages/domain/src/engine/rivalSituationalContext.ts
+	modified:   packages/domain/src/index.ts
+	modified:   packages/domain/src/test/domain.test.ts
+	modified:   packages/domain/src/types/billing.ts
+	modified:   packages/domain/src/types/events.ts
+	modified:   packages/domain/src/types/index.ts
+	modified:   supabase/functions/chat-turn/index.ts
+	modified:   supabase/functions/import_map.json
+	modified:   supabase/migrations/0001_core_tables.sql
+	modified:   supabase/migrations/0006_user_initialization.sql
+	modified:   supabase/tests/database_foundation.test.ts
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	packages/domain/src/engine/liveContext.test.ts
+	packages/domain/src/engine/liveContext.ts
+	packages/domain/src/engine/rivalEasterEgg.test.ts
+	packages/domain/src/engine/rivalEasterEgg.ts
+	packages/domain/src/engine/rivalLore.test.ts
+	packages/domain/src/engine/rivalLore.ts
+	packages/domain/src/engine/rivalRelationshipContext.test.ts
+	packages/domain/src/engine/rivalRelationshipContext.ts
+	packages/domain/src/engine/rivalSessionContinuity.test.ts
+	packages/domain/src/engine/rivalSessionContinuity.ts
+	packages/domain/src/engine/rivalV1Integration.test.ts
+	packages/domain/src/lore/
+	packages/domain/src/types/entitlement.test.ts
+	packages/domain/src/types/entitlement.ts
+	supabase/.gitignore
+	supabase/config.toml
+	supabase/functions/chat-turn/deno.json
+	supabase/functions/chat-turn/import_map.json
+	supabase/migrations/0009_entitlements.sql
+	supabase/migrations/0010_relationship_mode_alignment.sql
+	supabase/tests/entitlements.test.ts
+	supabase/tests/user_initialization.test.ts
+
+no changes added to commit (use "git add" and/or "git commit -a")
+

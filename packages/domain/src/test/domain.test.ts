@@ -33,11 +33,11 @@ describe('domain package exports and types', () => {
 
   it('instantiates core domain types correctly', () => {
     const appInfo: AppInfo = {
-      name: 'AI Rival',
+      name: 'Eclos',
       version: '0.1.0',
       status: 'ready',
     };
-    expect(appInfo.name).toBe('AI Rival');
+    expect(appInfo.name).toBe('Eclos');
 
     const relationship: RelationshipState = {
       userId: '11111111-1111-1111-1111-111111111111',
@@ -171,6 +171,7 @@ describe('domain package exports and types', () => {
       customerId: 'ls_cus_456',
       status: 'active',
       variantId: 'var_789',
+      tier: 'paid',
       currentPeriodEndsAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

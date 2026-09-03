@@ -20,7 +20,6 @@
 .rival-symbol {
   font-size: var(--text-4xl);
   color: var(--accent-primary);
-  animation: pulse var(--transition-slow) infinite alternate;
 }
 
 .rival-identity { display: flex; flex-direction: column; line-height: 1; }
@@ -30,7 +29,7 @@
   color: var(--text-secondary);
   display: flex;
   font-size: var(--text-xs);
-  gap: var(--space-2);
+  gap: var(--space-1);
   letter-spacing: 0.08em;
   margin: calc(var(--space-5) * -1) 0 var(--space-5);
   min-height: 24px;
@@ -38,43 +37,78 @@
 }
 
 .rival-presence-glyph {
-  background: var(--accent-primary);
+  align-items: center;
+  background: transparent;
+  border: 0;
   border-radius: 50%;
-  display: block;
-  height: 6px;
-  opacity: 0.75;
-  transition: opacity var(--transition-normal), transform var(--transition-normal), background var(--transition-normal);
-  width: 6px;
+  display: inline-flex;
+  height: 36px;
+  justify-content: center;
+  padding: 0;
+  position: relative;
+  transition: opacity var(--transition-normal), transform var(--transition-normal);
+  width: 36px;
 }
 
-.rival-presence[data-presence-state="observing"] .rival-presence-glyph,
-.rival-presence[data-presence-state="active"] .rival-presence-glyph { transform: scale(1.15); }
+.rival-presence-glyph::before {
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 65%, transparent);
+  border-radius: 50%;
+  content: '';
+  inset: 7px;
+  opacity: 0.7;
+  position: absolute;
+  transition: border-color var(--transition-normal), opacity var(--transition-normal), transform var(--transition-normal);
+}
+
+.rival-presence-glyph-core {
+  background: var(--accent-primary);
+  border-radius: 45% 55% 50% 50%;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent);
+  height: 8px;
+  opacity: 0.85;
+  transform: rotate(45deg);
+  transition: opacity var(--transition-normal), transform var(--transition-normal), background var(--transition-normal);
+  width: 8px;
+}
+
+.rival-presence[data-presence-state="observing"] .rival-presence-glyph-core,
+.rival-presence[data-presence-state="active"] .rival-presence-glyph-core { transform: rotate(45deg) scale(1.15); }
 .rival-presence[data-presence-state="bored"] .rival-presence-glyph {
   opacity: 0.35;
   transform: translateX(3px);
 }
 .rival-presence[data-presence-state="resting"] .rival-presence-glyph {
   opacity: 0.35;
-  transform: scale(0.75);
+  transform: scale(0.8);
 }
 .rival-presence[data-presence-state="sleeping"] .rival-presence-glyph,
-.rival-presence[data-presence-state="away"] .rival-presence-glyph { opacity: 0.22; }
-.rival-presence[data-presence-state="serious"] .rival-presence-glyph { background: var(--text-primary); opacity: 0.8; }
+.rival-presence[data-presence-state="away"] .rival-presence-glyph { opacity: 0.22; transform: translateX(-4px) scale(0.72); }
+.rival-presence[data-presence-state="sleeping"] .rival-presence-glyph-core { transform: rotate(0deg) scaleX(1.5) scaleY(0.45); }
+.rival-presence[data-presence-state="serious"] .rival-presence-glyph-core { background: var(--text-primary); opacity: 0.8; }
 .rival-presence[data-presence-state="awakening"] .rival-presence-glyph,
 .rival-presence[data-presence-state="returning"] .rival-presence-glyph { animation: presence-return var(--transition-slow) ease-out; }
 .rival-presence[data-presence-animation="thinking"] .rival-presence-glyph { animation: presence-think 1.8s ease-in-out infinite alternate; }
 .rival-presence[data-presence-animation="departing"] { opacity: 0.45; }
 .rival-presence[data-presence-animation="returning"] { animation: presence-return var(--transition-slow) ease-out; }
+.rival-presence[data-presence-caught="true"] .rival-presence-glyph { animation: presence-caught 350ms ease-out; }
 
-.rival-presence-wake {
+.rival-presence-glyph:hover .rival-presence-glyph-core,
+.rival-presence-glyph:focus-visible .rival-presence-glyph-core { transform: rotate(45deg) scale(1.25); }
+.rival-presence-glyph:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.rival-presence-copy { position: absolute; height: 1px; overflow: hidden; width: 1px; clip: rect(0 0 0 0); white-space: nowrap; }
+.rival-presence-whisper { color: var(--text-secondary); opacity: 0.8; }
+
+.rival-presence-wake, .rival-presence-poke {
   background: transparent;
   border: 0;
   color: var(--accent-primary);
   font: inherit;
   letter-spacing: inherit;
-  padding: 0;
+  min-height: 36px;
+  padding: 0 var(--space-1);
   text-transform: uppercase;
 }
+.rival-presence-wake:focus-visible, .rival-presence-poke:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 
 .ambient-rival-message {
   border-left: 2px solid var(--accent-primary);
@@ -84,11 +118,23 @@
   padding: 0 var(--space-3);
 }
 
-.ambient-rival-message p:last-child {
+.ambient-rival-message p:nth-of-type(2) {
   font-size: var(--text-base);
   line-height: 1.45;
   margin: var(--space-1) 0 0;
   overflow-wrap: anywhere;
+}
+
+.ambient-rival-dismiss {
+  background: transparent;
+  border: 0;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  margin-top: var(--space-2);
+  padding: 0;
+  text-transform: uppercase;
 }
 
 @keyframes presence-return {
@@ -101,8 +147,14 @@
   to { transform: translateY(-2px); opacity: 0.9; }
 }
 
+@keyframes presence-caught {
+  0% { transform: translateX(0); }
+  35% { transform: translateX(-4px); opacity: 1; }
+  100% { transform: translateX(0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .rival-presence *, .rival-presence { animation: none !important; transition: none; }
+  .rival-presence *, .rival-presence, .rival-symbol, .step-container, .loading-text { animation: none !important; transition: none; }
 }
 .eyebrow, .section-label { color: var(--text-secondary); font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
 .entry-copy { color: var(--text-secondary); font-size: var(--text-base); margin: 0; max-width: 34rem; }
@@ -326,11 +378,13 @@
 .judgment-observation { background: var(--bg-secondary); border-left: 2px solid var(--accent-primary); padding: var(--space-3); }
 .judgment-observation { overflow-wrap: anywhere; }
 .judgment-observation p:last-child { margin: var(--space-1) 0 0; }
+.judgment-card { border-top: 2px solid var(--accent-primary); }
+.judgment-card .rival-text { margin: var(--space-2) 0; }
 
 .loading-text {
   text-align: center;
   color: var(--text-secondary);
-  font-family: monospace;
+  font-family: inherit;
   margin-top: var(--space-8);
   animation: blink 1s infinite alternate;
 }

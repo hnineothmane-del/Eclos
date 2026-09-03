@@ -6,6 +6,7 @@ import type { SelectedMemory } from './rivalMemorySelector.js';
 import type { SelectedInsight } from './rivalInsightSelector.js';
 import type { RelationshipState } from '../types/relationship.js';
 import type { DomainEvent } from '../types/events.js';
+import { deriveRivalRelationshipContext } from './rivalRelationshipContext.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -64,7 +65,7 @@ const baseInput: AgencyInput = {
 
 function mkInitiativeEvent(category: string, time: string): DomainEvent {
   return {
-    id: `ev-${Math.random()}`,
+    id: `ev-${category}-${time}`,
     userId: 'u1',
     eventType: 'agency_initiative',
     source: 'system',
@@ -153,12 +154,34 @@ describe('RivalAgency', () => {
     expect(dec.priority).toBe(AGENCY_PRIORITIES.RARE_EVENT);
   });
 
+  it('selects ambient life categories from state and known lore without randomness', () => {
+    const boredPresence = { ...basePresence, state: 'bored' as const, activity: 'waiting' as const, action: 'rare_character_event' as const };
+    expect(deriveAgencyDecision({ ...baseInput, presence: boredPresence })).toMatchObject({ action: 'SELF_AMUSEMENT' });
+    const occupiedPresence = { ...basePresence, activity: 'occupied' as const, action: 'rare_character_event' as const };
+    const loreEvent = { id: 'lore-1', userId: 'u1', eventType: 'rival_lore_revealed' as const, source: 'system' as const, payload: { loreId: 'cosmic_phone' }, createdAt: '2026-01-01T00:00:00Z' };
+    expect(deriveAgencyDecision({ ...baseInput, presence: occupiedPresence, allEvents: [loreEvent] })).toMatchObject({ action: 'FICTIONAL_INTERRUPTION' });
+  });
+
+  it('suppresses repeat ambient life moments with global and category cooldowns', () => {
+    const presence = { ...basePresence, state: 'bored' as const, action: 'rare_character_event' as const };
+    expect(deriveAgencyDecision({ ...baseInput, presence, recentInitiatives: [mkInitiativeEvent('SELF_AMUSEMENT', NOW)] })).toMatchObject({ action: 'QUIET' });
+  });
+
+  it('keeps old callback interruptions unavailable before the relationship is familiar', () => {
+    const memory: SelectedMemory = {
+      memory: { key: 'm1', type: 'callback', epistemicStatus: 'observed', description: '', verbatimQuote: null, confidence: 0.9, strength: 10, provenance: { sourceEventIds: [], sourceInsightTypes: [], challengeId: null, derivedAt: NOW } },
+      score: 90, reason: 'callback',
+    };
+    const introductory = { ...baseRelationship, familiarity: 15, trust: 15, warmth: 10, respect: 20 };
+    expect(deriveAgencyDecision({ ...baseInput, relationship: introductory, relationshipContext: deriveRivalRelationshipContext(introductory), selectedMemory: memory })).toMatchObject({ action: 'QUIET' });
+  });
+
   it('deterministically sorts candidates by priority', () => {
     // Both user roast (priority 70) and return greeting (priority 80)
     const presence = { ...basePresence, action: 'return_greeting' as const };
     const dec = deriveAgencyDecision({ ...baseInput, presence, userInput: 'idiot' });
-    // RETURN_WAKE (80) > USER_INTERACTION (70)
-    expect(dec.action).toBe('RETURN_REMARK');
+    // Deliberate user interaction (85) > passive return/wake (80)
+    expect(dec.action).toBe('USER_ROAST_RESPONSE');
   });
 
   it('routes interaction hooks correctly', () => {

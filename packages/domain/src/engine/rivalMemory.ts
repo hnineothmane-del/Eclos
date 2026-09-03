@@ -304,7 +304,7 @@ export function deriveRivalMemories(input: DeriveRivalMemoriesInput): RivalMemor
   // ─────────────────────────────────────────────────────────────────────
   const hasFailed = judgedEvents.some((e) => (e.payload as any)?.verdict === 'failed');
   if (hasFailed) {
-    for (const [key, value] of existingValues.entries()) {
+    for (const [key] of existingValues.entries()) {
       if (key.startsWith('confidence_claim:') && !result.contradictedKeys.includes(key)) {
         result.contradictedKeys.push(key);
         // We do NOT delete the original. The contradiction is the signal.

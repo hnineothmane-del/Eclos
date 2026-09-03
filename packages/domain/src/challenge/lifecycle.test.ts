@@ -12,9 +12,12 @@ describe('validateTransition', () => {
       ['accepted → started', 'accepted', 'started'],
       ['started → attempted', 'started', 'attempted'],
       ['attempted → evidence_submitted', 'attempted', 'evidence_submitted'],
+      ['started → evidence_submitted', 'started', 'evidence_submitted'],
       ['evidence_submitted → needs_more_evidence', 'evidence_submitted', 'needs_more_evidence'],
       ['evidence_submitted → judged', 'evidence_submitted', 'judged'],
       ['needs_more_evidence → evidence_submitted', 'needs_more_evidence', 'evidence_submitted'],
+      ['issued → closed', 'issued', 'closed'],
+      ['started → closed', 'started', 'closed'],
       ['judged → closed', 'judged', 'closed'],
     ] as [string, ChallengeStatus, ChallengeStatus][])(
       '%s',
@@ -27,9 +30,7 @@ describe('validateTransition', () => {
   describe('invalid transitions', () => {
     it.each([
       ['issued → started (skips negotiated/accepted)', 'issued', 'started'],
-      ['issued → closed (skip)', 'issued', 'closed'],
       ['accepted → negotiated (backward)', 'accepted', 'negotiated'],
-      ['started → evidence_submitted (skips attempted)', 'started', 'evidence_submitted'],
       ['attempted → judged (skips evidence_submitted)', 'attempted', 'judged'],
       ['evidence_submitted → accepted (backward)', 'evidence_submitted', 'accepted'],
       ['judged → started (backward)', 'judged', 'started'],

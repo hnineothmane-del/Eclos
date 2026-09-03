@@ -1,6 +1,6 @@
 {
   "imports": {
-    "@ai-rival/domain": "../../packages/domain/src/index.ts",
-    "@ai-rival/domain/": "../../packages/domain/src/"
+    "@ai-rival/domain": "../../packages/domain/dist/index.js",
+    "@ai-rival/domain/": "../../packages/domain/dist/"
   }
 }

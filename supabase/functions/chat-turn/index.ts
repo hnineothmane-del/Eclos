@@ -13,6 +13,7 @@ import {
 const corsHeaders = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
 const activeStatuses = ['issued', 'negotiated', 'accepted', 'started', 'attempted', 'evidence_submitted', 'needs_more_evidence'];
 const ambientEventTypes = new Set(['ambient_observation', 'ambient_comment', 'unexpected_wake', 'sleep_start', 'sleep_end', 'return_greeting', 'idle_reaction', 'session_reentry', 'rare_character_event']);
+const interactionHooks = new Set(['tap', 'poke', 'wake', 'user_roast']);
 
 function json(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -29,14 +30,13 @@ function mapChallenge(row: Record<string, any>) {
   };
 }
 
-function isAmbientDecision(value: unknown): value is { state: string; activity: string; attention: string; action: string; reason: string; sourceEventIds: string[]; generatedAt: string } {
+function isPresenceDecision(value: unknown): value is { state: string; activity: string; attention: string; action: string | null; reason: string; sourceEventIds: string[]; generatedAt: string } {
   if (!value || typeof value !== 'object') return false;
   const decision = value as Record<string, unknown>;
   return typeof decision.state === 'string'
     && typeof decision.activity === 'string'
     && typeof decision.attention === 'string'
-    && typeof decision.action === 'string'
-    && ambientEventTypes.has(decision.action)
+    && (decision.action === null || (typeof decision.action === 'string' && ambientEventTypes.has(decision.action)))
     && typeof decision.reason === 'string'
     && typeof decision.generatedAt === 'string'
     && Array.isArray(decision.sourceEventIds)
@@ -61,9 +61,11 @@ serve(async (req) => {
     const { data: { user }, error: authError } = await authClient.auth.getUser();
     if (authError || !user) return json({ error: 'Unauthorized' }, 401);
     const body = await req.json();
-    const ambientDecision = isAmbientDecision(body.presenceDecision) ? body.presenceDecision : null;
+    const presenceDecision = isPresenceDecision(body.presenceDecision) ? body.presenceDecision : null;
+    const ambientDecision = presenceDecision?.action ? presenceDecision : null;
+    const interactionHook = typeof body.interactionHook === 'string' && interactionHooks.has(body.interactionHook) ? body.interactionHook : null;
     const userInput = typeof body.userInput === 'string' ? body.userInput.trim() : '';
-    if (!userInput && !ambientDecision) return json({ error: 'userInput or a valid ambient presence event is required' }, 400);
+    if (!userInput && !ambientDecision && !interactionHook) return json({ error: 'userInput, a valid ambient event, or interaction is required' }, 400);
 
     const trustedClient = createClient(supabaseUrl, serviceRoleKey);
     
@@ -73,7 +75,18 @@ serve(async (req) => {
     // The service-role client stays inside this Edge Function and performs trusted writes.
     const { data: usage, error: usageError } = await trustedClient.rpc('increment_usage_and_check', { p_user_id: user.id, p_interaction_delta: 1 });
     if (usageError) throw usageError;
-    if (!usage?.allowed) return json({ error: 'Usage limit reached' }, 429);
+    if (!usage?.allowed) {
+      return json({
+        error: usage?.reason === 'rate_limited' ? 'Please slow down and try again shortly.' : 'You have used today\'s allowance.',
+        code: usage?.reason === 'rate_limited' ? 'RATE_LIMITED' : 'USAGE_LIMIT_REACHED',
+        entitlement: {
+          tier: usage?.tier === 'paid' ? 'paid' : 'free',
+          active: Boolean(usage?.active),
+          dailyLimit: Number(usage?.daily_limit || 0),
+          currentInteractions: Number(usage?.current_interactions || 0),
+        },
+      }, 429);
+    }
 
     const { data: challengeRows, error: challengeError } = await trustedClient
       .from('challenges').select('*').eq('user_id', user.id).in('status', activeStatuses).order('updated_at', { ascending: false }).limit(1);
@@ -91,19 +104,20 @@ serve(async (req) => {
     
     const aiResponse = ambientDecision
       ? await planner.planAmbientTurn({ userId: user.id, presenceDecision: ambientDecision as PresenceDecision, activeChallenge })
-      : await planner.planTurn({ userId: user.id, userInput, activeChallenge });
+      : await planner.planTurn({ userId: user.id, userInput, activeChallenge, presenceDecision: presenceDecision as PresenceDecision | null, interactionHook: interactionHook as any, nowIso: new Date().toISOString() });
 
     // A silent presence result is not a model call and has no UI message.
     if (!aiResponse) return json({ ambient: true, response: null });
 
     // The selector is deterministic server-side context; AI event suggestions
     // never create challenges.
+    let issuedChallenge = null;
     if (!ambientDecision && aiResponse.challengeSelection && !activeChallenge) {
       try {
         const { ChallengeEngine } = await import('@ai-rival/domain');
         const selection = aiResponse.challengeSelection;
         const challengeEngine = new ChallengeEngine({ client: dbClient, authenticatedUserId: user.id, router: modelRouter });
-        await challengeEngine.issue(user.id, {
+        issuedChallenge = await challengeEngine.issue({
           userId: user.id,
           domain: selection.domain,
           objective: selection.objective,
@@ -119,9 +133,28 @@ serve(async (req) => {
       }
     }
 
-    return json({ response: aiResponse.response, intent: aiResponse.intent, mode: aiResponse.register, humorMechanism: aiResponse.humorMechanism, seriousFlag: aiResponse.seriousFlag, ambient: !!ambientDecision });
+    return json({
+      response: aiResponse.response,
+      intent: aiResponse.intent,
+      mode: aiResponse.register,
+      humorMechanism: aiResponse.humorMechanism,
+      seriousFlag: aiResponse.seriousFlag,
+      ambient: !!ambientDecision,
+      challenge: issuedChallenge,
+      easterEgg: aiResponse.easterEgg?.authorized ? { id: aiResponse.easterEgg.id, visualCue: aiResponse.easterEgg.visualCue } : null,
+      entitlement: {
+        tier: usage?.tier === 'paid' ? 'paid' : 'free',
+        active: Boolean(usage?.active),
+        dailyLimit: Number(usage?.daily_limit || 0),
+        currentInteractions: Number(usage?.current_interactions || 0),
+      },
+    });
   } catch (error) {
-    console.error('chat-turn failed', error);
-    return json({ error: 'Unable to complete chat turn' }, 500);
+    console.error('chat-turn failed:', error);
+    return json({ 
+      error: 'Unable to complete chat turn',
+      details: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    }, 500);
   }
 });

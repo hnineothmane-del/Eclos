@@ -8,6 +8,7 @@ vi.mock('./lib/api', () => ({
   ensureSession: vi.fn(),
   chatTurn: vi.fn(),
   ambientTurn: vi.fn(),
+  rivalInteraction: vi.fn(),
   acceptChallenge: vi.fn(),
   declineChallenge: vi.fn(),
   submitEvidence: vi.fn(),
@@ -38,10 +39,11 @@ describe('HomePage First-Session Vertical Slice', () => {
     vi.clearAllMocks();
   });
 
-  it('landing renders Rival and goal choices', () => {
+  it('landing renders Eclos and The Rival with goal choices', () => {
     render(<HomePage />);
     expect(screen.getByText(/What are we proving?/i)).toBeInTheDocument();
-    expect(screen.getByText('Rival')).toBeInTheDocument();
+    expect(screen.getByText('The Rival')).toBeInTheDocument();
+    expect(screen.getByText('Eclos')).toBeInTheDocument();
     expect(screen.getByText(/Pick a quick claim/i)).toBeInTheDocument();
     expect(screen.getByText('Get better at coding')).toBeInTheDocument();
   });
@@ -195,6 +197,8 @@ describe('HomePage First-Session Vertical Slice', () => {
     await act(async () => {});
     expect(api.ambientTurn).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText('Rival ambient remark')).toHaveTextContent('You returned. Remarkable.');
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByLabelText('Rival ambient remark')).not.toBeInTheDocument();
     vi.useRealTimers();
   });
 
@@ -203,5 +207,13 @@ describe('HomePage First-Session Vertical Slice', () => {
     render(<HomePage />);
     expect(screen.getByRole('button', { name: /Make the claim/i })).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/make your own claim/i)).toBeInTheDocument();
+  });
+
+  it('routes a presence tap through the existing interaction path without a second chat turn', async () => {
+    vi.mocked(api.rivalInteraction).mockResolvedValue({});
+    render(<HomePage />);
+    fireEvent.click(screen.getByRole('button', { name: "Get Rival's attention" }));
+    await waitFor(() => expect(api.rivalInteraction).toHaveBeenCalledTimes(1));
+    expect(api.chatTurn).not.toHaveBeenCalled();
   });
 });

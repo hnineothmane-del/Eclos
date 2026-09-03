@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { deriveCharacterPlan } from './characterDirector.js';
 import type { CharacterDirectorInput } from './characterDirector.js';
+import { deriveRivalRelationshipContext } from './rivalRelationshipContext.js';
 
 const relationship = { userId: 'u', respect: 55, warmth: 45, trust: 60, rivalry: 72, familiarity: 65, curiosity: 55, mode: 'permanent_rival' as const, updatedAt: '2026-01-01T00:00:00Z' };
 const base: CharacterDirectorInput = { userInput: 'hello', relationship, activeChallenge: null, memories: [], processInsights: [], recentHumor: [] };
@@ -54,5 +55,14 @@ describe('character director', () => {
     const memory = { score: 9, item: { id: 'm', userId: 'u', tier: 'permanent' as const, category: 'running_joke' as const, key: 'alarm', value: 'alarm', strength: 90, lastAccessedAt: 'x', expiresAt: null, createdAt: 'x', updatedAt: 'x' } };
     const plan = deriveCharacterPlan({ ...base, relationship: { ...relationship, familiarity: 20 }, memories: [memory] });
     expect(plan.humor).toBeNull();
+  });
+
+  it('uses relationship depth as a callback and sincerity permission rather than a new score', () => {
+    const memory = { score: 9, item: { id: 'm', userId: 'u', tier: 'permanent' as const, category: 'running_joke' as const, key: 'alarm', value: 'alarm', strength: 90, lastAccessedAt: 'x', expiresAt: null, createdAt: 'x', updatedAt: 'x' } };
+    const introductory = { ...relationship, familiarity: 20, trust: 20, respect: 20, warmth: 10 };
+    expect(deriveCharacterPlan({ ...base, relationship: introductory, relationshipContext: deriveRivalRelationshipContext(introductory), memories: [memory] }).humor).toBeNull();
+    const trusted = { ...relationship, familiarity: 70, trust: 70, respect: 70, warmth: 55 };
+    const recognition = deriveCharacterPlan({ ...base, relationship: trusted, relationshipContext: deriveRivalRelationshipContext(trusted), userInput: 'I finally did it', processInsights: [{ type: 'persistence_after_failure', challengeId: 'c', sourceEventIds: ['a'], description: 'recovered', confidence: 0.9 }] });
+    expect(recognition).toMatchObject({ interactionMode: 'sincere_recognition', sincerity: true });
   });
 });

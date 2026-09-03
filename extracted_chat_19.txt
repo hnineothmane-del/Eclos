@@ -1,0 +1,19 @@
+Created At: 2026-09-02T03:36:53+01:00
+Completed At: 2026-09-02T03:36:53+01:00
+File Path: `file:///c:/Users/a/Desktop/Roast%20app/supabase/functions/chat-turn/index.ts`
+Total Lines: 155
+Total Bytes: 8478
+Showing lines 145 to 155
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+145:         active: Boolean(usage?.active),
+146:         dailyLimit: Number(usage?.daily_limit || 0),
+147:         currentInteractions: Number(usage?.current_interactions || 0),
+148:       },
+149:     });
+150:   } catch (error) {
+151:     console.error('chat-turn failed', error);
+152:     return json({ error: 'Unable to complete chat turn' }, 500);
+153:   }
+154: });
+155: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

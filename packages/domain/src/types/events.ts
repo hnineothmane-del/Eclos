@@ -21,7 +21,10 @@ export type EventType =
   | 'chat_message_sent'
   | 'process_signal'
   | 'process_thought'
-  | 'agency_initiative';
+  | 'rival_interaction'
+  | 'agency_initiative'
+  | 'rival_easter_egg_discovered'
+  | 'rival_lore_revealed';
 
 export interface DomainEvent<T = Record<string, unknown>> {
   id: string;

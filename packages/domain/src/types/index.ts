@@ -6,6 +6,7 @@ export * from './capability.js';
 export * from './events.js';
 export * from './chat.js';
 export * from './billing.js';
+export * from './entitlement.js';
 export * from './aiContract.js';
 
 // Base application metadata types

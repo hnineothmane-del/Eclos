@@ -131,7 +131,6 @@ function extractJudgedChallenges(events: readonly DomainEvent[]): JudgedChalleng
 /** Which process insight types occurred in events for a given challenge. */
 function insightTypesForChallenge(
   challengeEvents: DomainEvent[],
-  challenge: { id: string; expectedDurationMinutes?: number | null },
 ): Set<ProcessInsight['type']> {
   // Re-use the same signals as processInsights.ts but without re-running the full engine.
   // We look directly at signal/thought events in the event log.
@@ -247,7 +246,7 @@ export function deriveRivalInsights(input: DeriveRivalInsightsInput): RivalInsig
   // Map challengeId → insight types for that challenge
   const challengeInsightTypes = new Map<string, Set<ProcessInsight['type']>>();
   for (const [cid, evts] of byChallengeId.entries()) {
-    challengeInsightTypes.set(cid, insightTypesForChallenge(evts, { id: cid }));
+    challengeInsightTypes.set(cid, insightTypesForChallenge(evts));
   }
 
   // Collect all challenge IDs that had a particular insight type

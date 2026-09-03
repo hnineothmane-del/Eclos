@@ -169,7 +169,7 @@ describe('Supabase Database Foundation (Task 2)', () => {
   describe('8. Subscription Uniqueness', () => {
     it('enforces exactly one subscription row per user', () => {
       expect(sql1).toMatch(/user_id\s+UUID\s+NOT\s+NULL\s+UNIQUE\s+REFERENCES\s+auth\.users\(id\)/i);
-      expect(sql1).toMatch(/lemon_squeezy_id\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i);
+      expect(sql1).toMatch(/lemon_squeezy_id\s+TEXT\s+UNIQUE/i);
     });
   });
 

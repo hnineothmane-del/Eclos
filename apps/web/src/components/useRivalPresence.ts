@@ -30,6 +30,7 @@ export interface UseRivalPresenceOptions {
   serious?: boolean;
   relationship?: RelationshipState;
   onAmbientEvent?: (decision: PresenceDecision) => void;
+  onPresenceInteraction?: (interaction: PresenceInteraction, decision: PresenceDecision) => void;
 }
 
 export interface RivalPresenceRuntime {
@@ -49,12 +50,13 @@ function nowIso() {
  * timestamps whenever the page becomes relevant; it never polls the network or
  * creates language for a visual-only transition.
  */
-export function useRivalPresence({ activeChallenge = null, serious = false, relationship = neutralRelationship, onAmbientEvent }: UseRivalPresenceOptions): RivalPresenceRuntime {
+export function useRivalPresence({ activeChallenge = null, serious = false, relationship = neutralRelationship, onAmbientEvent, onPresenceInteraction }: UseRivalPresenceOptions): RivalPresenceRuntime {
   const startedAt = useRef(nowIso());
   const lastUserInteractionAt = useRef(startedAt.current);
   const currentState = useRef<PresenceState>('active');
   const recentEvents = useRef<AmbientEventRecord[]>([]);
   const onAmbientEventRef = useRef(onAmbientEvent);
+  const onPresenceInteractionRef = useRef(onPresenceInteraction);
   const activeChallengeRef = useRef(activeChallenge);
   const seriousRef = useRef(serious);
   const relationshipRef = useRef(relationship);
@@ -66,8 +68,10 @@ export function useRivalPresence({ activeChallenge = null, serious = false, rela
     userActivity: 'engaged',
     relationship,
   }));
+  const latestDecision = useRef(decision);
 
   onAmbientEventRef.current = onAmbientEvent;
+  onPresenceInteractionRef.current = onPresenceInteraction;
   activeChallengeRef.current = activeChallenge;
   seriousRef.current = serious;
   relationshipRef.current = relationship;
@@ -89,8 +93,11 @@ export function useRivalPresence({ activeChallenge = null, serious = false, rela
     });
 
     currentState.current = next.state;
+    latestDecision.current = next;
     setDecision(next);
-    if (allowAmbient && next.action) {
+    // Going to sleep is a visual-only state change. Do not make a network
+    // request or consume the spoken ambient budget merely to show it.
+    if (allowAmbient && next.action && next.action !== 'sleep_start') {
       recentEvents.current = [...recentEvents.current.slice(-9), { type: next.action, occurredAt: next.generatedAt }];
       onAmbientEventRef.current?.(next);
     }
@@ -105,9 +112,12 @@ export function useRivalPresence({ activeChallenge = null, serious = false, rela
   const recordInteraction = useCallback((interaction: PresenceInteraction) => {
     // This is a contract seam only. Future interaction mechanics can attach
     // provenance here without adding an independent character runtime.
+    const observedPresence = latestDecision.current;
     if (interaction === 'wake') currentState.current = 'sleeping';
-    markMeaningfulActivity();
-  }, [markMeaningfulActivity]);
+    lastUserInteractionAt.current = nowIso();
+    resolve('engaged');
+    onPresenceInteractionRef.current?.(interaction, observedPresence);
+  }, [resolve]);
 
   useEffect(() => {
     const onVisibilityChange = () => {
@@ -150,8 +160,10 @@ export function useRivalPresence({ activeChallenge = null, serious = false, rela
         ? PRESENCE_TIMING.OBSERVE_MS
         : idleFor < PRESENCE_TIMING.BORED_MS
           ? PRESENCE_TIMING.BORED_MS
+          : idleFor < PRESENCE_TIMING.AMBIENT_LIFE_MS
+            ? PRESENCE_TIMING.AMBIENT_LIFE_MS
           : idleFor < PRESENCE_TIMING.REST_MS
-          ? PRESENCE_TIMING.REST_MS
+            ? PRESENCE_TIMING.REST_MS
           : idleFor < PRESENCE_TIMING.SLEEP_MS
             ? PRESENCE_TIMING.SLEEP_MS
           : null;

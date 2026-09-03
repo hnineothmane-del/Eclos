@@ -45,6 +45,19 @@ describe('presence engine', () => {
     expect(toPresenceVisualState(resting)).toMatchObject({ animationHint: 'resting', canInteract: true });
   });
 
+  it('authorizes one rare life opportunity only after sustained quiet boredom', () => {
+    const tooSoon = resolvePresence({ ...base, userActivity: 'idle', lastUserInteractionAt: before(PRESENCE_TIMING.BORED_MS) });
+    const eligible = resolvePresence({ ...base, userActivity: 'idle', lastUserInteractionAt: before(PRESENCE_TIMING.AMBIENT_LIFE_MS) });
+    expect(tooSoon).toMatchObject({ state: 'bored', action: null });
+    expect(eligible).toMatchObject({ state: 'bored', action: 'rare_character_event' });
+    expect(resolvePresence({ ...base, userActivity: 'idle', lastUserInteractionAt: before(PRESENCE_TIMING.AMBIENT_LIFE_MS), recentAmbientEvents: [{ type: 'rare_character_event', occurredAt: now }] }).action).toBeNull();
+  });
+
+  it('suppresses spontaneous speech during active challenge work', () => {
+    const decision = resolvePresence({ ...base, activeChallenge: { status: 'started' } as any, userActivity: 'idle', lastUserInteractionAt: before(PRESENCE_TIMING.AMBIENT_LIFE_MS) });
+    expect(decision).toMatchObject({ action: null, reason: 'challenge_critical' });
+  });
+
   it('limits ambient speech to one selected event per session without changing visual life states', () => {
     const returning = resolvePresence({ ...base, state: 'away', lastUserInteractionAt: before(PRESENCE_TIMING.AWAY_MS) });
     expect(returning.action).toBe('return_greeting');

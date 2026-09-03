@@ -7,13 +7,17 @@ export type SubscriptionStatus =
   | 'cancelled'
   | 'expired';
 
+export type SubscriptionTier = 'free' | 'paid';
+
 export interface Subscription {
   id: string;
   userId: string;
-  lemonSqueezyId: string;
-  customerId: string;
+  /** Null until a future billing provider attaches an external subscription. */
+  lemonSqueezyId: string | null;
+  customerId: string | null;
   status: SubscriptionStatus;
-  variantId: string;
+  variantId: string | null;
+  tier: SubscriptionTier;
   currentPeriodEndsAt: string | null;
   createdAt: string;
   updatedAt: string;

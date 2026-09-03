@@ -1,0 +1,17 @@
+Created At: 2026-08-29T16:53:11+01:00
+Completed At: 2026-08-29T16:53:11+01:00
+
+The command exited with code 0.
+Output:
+commit 62529fa4f5ad6396ba249a38095f39060a0beea4
+Author: Othmane <othmane@monkcopy.com>
+Date:   Sat Aug 29 16:53:05 2026 +0100
+
+    feat: complete backend vertical slice integration
+
+ packages/domain/src/engine/verticalSlice.test.ts | 180 +++++++++++++++++++++++
+ supabase/functions/chat-turn/index.ts            |  52 ++++++-
+ supabase/functions/import_map.json               |   6 +
+ supabase/migrations/0006_user_initialization.sql |  55 +++++++
+ 4 files changed, 286 insertions(+), 7 deletions(-)
+

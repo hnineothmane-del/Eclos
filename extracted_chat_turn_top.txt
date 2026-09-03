@@ -1,0 +1,59 @@
+Created At: 2026-09-03T23:22:42+01:00
+Completed At: 2026-09-03T23:22:43+01:00
+File Path: `file:///c:/Users/a/Desktop/Roast%20app/apps/web/src/pages/HomePage.tsx`
+Total Lines: 416
+Total Bytes: 16564
+Showing lines 60 to 110
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+60:     const status = activeChallengeRef.current?.status;
+61:     const challengeCritical = status === 'evidence_submitted' || status === 'needs_more_evidence';
+62:     if (challengeCritical || seriousRef.current || flowRef.current === 'SUBMITTING_PROOF' || flowRef.current === 'JUDGMENT') return;
+63:     try {
+64:       const result = await ambientTurn(presenceDecision);
+65:       if (typeof result?.response === 'string' && result.response.trim()) setAmbientMessage(result.response);
+66:     } catch {
+67:       // Ambient presence is deliberately non-blocking. A failed aside must not
+68:       // interrupt the challenge or replace the user's current screen.
+69:     }
+70:   }, []);
+71:   const handlePresenceInteraction = useCallback(async (interaction: PresenceInteraction, presenceDecision: PresenceDecision) => {
+72:     try {
+73:       const result = await rivalInteraction(interaction, presenceDecision);
+74:       if (result?.easterEgg?.visualCue === 'caught') setCaught(true);
+75:       if (typeof result?.response === 'string' && result.response.trim()) setAmbientMessage(result.response);
+76:     } catch {
+77:       // An optional interaction never blocks the current work flow.
+78:     }
+79:   }, []);
+80:   const rivalPresence = useRivalPresence({
+81:     activeChallenge: activeChallenge as Challenge | null,
+82:     serious: Boolean(response?.seriousFlag),
+83:     onAmbientEvent: handleAmbientEvent,
+84:     onPresenceInteraction: handlePresenceInteraction,
+85:   });
+86: 
+87:   // Quick preset goals
+88:   const presetGoals = [
+89:     'Get better at coding',
+90:     'Get in shape',
+91:     'Study consistently'
+92:   ];
+93: 
+94:   const standingFor = (verdict: string, delta: number) => {
+95:     if (verdict === 'passed' && delta > 0) return 'Suspiciously competent';
+96:     if (verdict === 'failed') return 'Still under review';
+97:     if (verdict === 'needs_more_evidence') return 'Unconvinced—for now';
+98:     return 'Being watched';
+99:   };
+100: 
+101:   const handleGoalSubmit = async (goal: string) => {
+102:     try {
+103:       rivalPresence.markMeaningfulActivity();
+104:       setFlow('LOADING');
+105:       await ensureSession();
+106:       
+107:       const turnResult = await chatTurn(goal);
+108:       setResponse(turnResult as RivalResponse);
+109:       
+110:       // Check if a challenge was created (we can query the DB to see if there is an active one)
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

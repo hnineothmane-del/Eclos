@@ -8,6 +8,10 @@ import {
   UpstreamRequestError,
 } from './errors.js';
 
+function interactionResponse(text: string, steps = [{ type: 'model_output', content: [{ type: 'text', text }] }]) {
+  return { steps };
+}
+
 describe('GeminiProvider', () => {
   it('throws AuthenticationError if apiKey is missing or empty', () => {
     expect(() => new GeminiProvider({ apiKey: '', model: 'gemini-2.5-flash' })).toThrow(
@@ -57,9 +61,7 @@ describe('GeminiProvider', () => {
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
-        json: async () => ({
-          output_text: JSON.stringify(mockPayload),
-        }),
+        json: async () => interactionResponse(JSON.stringify(mockPayload)),
       } as unknown as Response);
 
       const provider = new GeminiProvider({
@@ -83,7 +85,7 @@ describe('GeminiProvider', () => {
       expect(body.model).toBe('models/gemini-2.5-flash');
       expect(body.input).toBe('User completed half the workout');
       expect(body.system_instruction).toBe('You are an abrasive rival');
-      expect(body.generation_config.response_mime_type).toBe('application/json');
+      expect(body.generation_config).not.toHaveProperty('response_mime_type');
 
       expect(result.response).toBe('Nice try, but you skipped leg day.');
       expect(result.intent).toBe('mockery');
@@ -96,7 +98,7 @@ describe('GeminiProvider', () => {
         ok: true,
         status: 200,
         json: async () => ({
-          output_text: 'NOT_VALID_JSON',
+          ...interactionResponse('NOT_VALID_JSON'),
         }),
       } as unknown as Response);
 
@@ -111,11 +113,28 @@ describe('GeminiProvider', () => {
       );
     });
 
-    it('throws InvalidStructuredOutputError when output_text is missing', async () => {
+    it('extracts text from the final model output step', async () => {
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
-        json: async () => ({ unexpected: { foo: 'bar' } }),
+        json: async () => interactionResponse('{"response":"final"}', [
+          { type: 'model_output', content: [{ type: 'text', text: '{"response":"earlier","intent":"test"}' }] },
+          { type: 'model_output', content: [
+            { type: 'text', text: '{"response":"final","intent":"test' },
+            { type: 'text', text: '"}' },
+          ] },
+        ]),
+      } as unknown as Response);
+
+      const provider = new GeminiProvider({ apiKey: 'key', model: 'gemini-flash', fetchFn: mockFetch });
+      await expect(provider.generate({ prompt: 'test' })).resolves.toMatchObject({ response: 'final' });
+    });
+
+    it('throws InvalidStructuredOutputError when model output text is missing', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ steps: [{ type: 'thought', content: [{ type: 'text', text: 'not a model output' }] }] }),
       } as unknown as Response);
 
       const provider = new GeminiProvider({
@@ -152,7 +171,7 @@ describe('GeminiProvider', () => {
         ok: true,
         status: 200,
         json: async () => ({
-          output_text: JSON.stringify({ wrongField: 'value' }),
+          ...interactionResponse(JSON.stringify({ wrongField: 'value' })),
         }),
       } as unknown as Response);
 
@@ -180,7 +199,7 @@ describe('GeminiProvider', () => {
         ok: true,
         status: 200,
         json: async () => ({
-          output_text: JSON.stringify(mockPayload),
+          ...interactionResponse(JSON.stringify(mockPayload)),
         }),
       } as unknown as Response);
 
@@ -214,7 +233,7 @@ describe('GeminiProvider', () => {
         ok: true,
         status: 200,
         json: async () => ({
-          output_text: JSON.stringify(mockPayload),
+          ...interactionResponse(JSON.stringify(mockPayload)),
         }),
       } as unknown as Response);
 
@@ -292,11 +311,11 @@ describe('GeminiProvider', () => {
         ok: true,
         status: 200,
         json: async () => ({
-          output_text: JSON.stringify({
+          ...interactionResponse(JSON.stringify({
             response: 'ok',
             intent: 'test',
             eventSuggestions: [{ suggestedEventType: 'challenge_failed', suggestedPayload: { reason: 'x' }, confidence: 1.1 }],
-          }),
+          })),
         }),
       } as unknown as Response);
 

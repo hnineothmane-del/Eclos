@@ -157,12 +157,10 @@ interface EvidenceSubmissionRow {
 interface JudgmentHistoryRow {
   challenge_id: string;
   verdict: 'passed' | 'failed' | 'needs_more_evidence';
+  created_at: string;
 }
 
-interface EvidenceSubmissionResult {
-  submission_id: string;
-  evidence_round: number;
-}
+
 
 function difficultyNumberToBand(num: number): string {
   if (num <= 2) return 'trivial';
@@ -267,7 +265,7 @@ export class ChallengeEngine {
     consecutiveLowEffortFailures: number;
   }> {
     const [{ data: history, error: historyError }, { data: challenges, error: challengesError }] = await Promise.all([
-      this.client.from<JudgmentHistoryRow>('judgments').select('challenge_id, verdict').eq('user_id', userId),
+      this.client.from<JudgmentHistoryRow>('judgments').select('challenge_id, verdict, created_at').eq('user_id', userId).order('created_at', { ascending: false }),
       this.client.from<ChallengeRow>('challenges').select('*').eq('user_id', userId),
     ]);
     if (historyError || challengesError) {
@@ -289,9 +287,12 @@ export class ChallengeEngine {
     return {
       priorFailureConfirmed: priorHistory.some((item) => item.verdict === 'failed'),
       baselineDifficulty: clamp(baselineDifficulty, 1, 10),
-      recentSameBandCompletions: priorHistory.filter((item) =>
-        item.verdict === 'passed' && challengeById.get(item.challenge_id)?.difficulty === currentChallenge.difficulty,
-      ).length,
+      recentSameBandCompletions: priorHistory.filter((item) => {
+        const isPassed = item.verdict === 'passed';
+        const isSameDifficulty = challengeById.get(item.challenge_id)?.difficulty === currentChallenge.difficulty;
+        const isRecent = new Date(item.created_at).getTime() > Date.now() - 7 * 24 * 60 * 60 * 1000;
+        return isPassed && isSameDifficulty && isRecent;
+      }).length,
       consecutiveLowEffortFailures,
     };
   }
@@ -372,11 +373,14 @@ export class ChallengeEngine {
       parameters: parametersPayload,
     };
 
-    const { data, error } = await this.client
-      .from<ChallengeRow>('challenges')
-      .insert(insertPayload)
-      .select()
-      .single();
+    const { data, error } = await this.client.rpc<ChallengeRow>('issue_challenge', {
+      p_user_id: userId,
+      p_goal_id: goalId,
+      p_title: params.objective,
+      p_description: params.domain,
+      p_difficulty: difficultyBand,
+      p_parameters: parametersPayload,
+    });
 
     if (error || !data) {
       throw new DatabaseError(
@@ -384,19 +388,6 @@ export class ChallengeEngine {
         error?.code,
       );
     }
-
-    // Log challenge_issued event
-    await this.client.from('events').insert({
-      user_id: userId,
-      event_type: 'challenge_issued',
-      payload: {
-        challenge_id: data.id,
-        objective: params.objective,
-        difficulty: difficultyClamped,
-        domain: params.domain,
-        primitive: params.primitive ?? null,
-      },
-    });
 
     return mapRowToChallenge(data);
   }
@@ -589,7 +580,7 @@ export class ChallengeEngine {
   async submitEvidence(
     challengeId: string,
     params: SubmitEvidenceParams,
-  ): Promise<{ submissionId: string; challenge: Challenge }> {
+  ): Promise<{ submission: EvidenceSubmission; challenge: Challenge }> {
     this.assertAuthenticatedIdentity(params.userId, challengeId);
     const challenge = await this.getChallenge(challengeId);
 
@@ -619,7 +610,7 @@ export class ChallengeEngine {
     const kind = params.kind || 'text';
     const metadata = params.metadata || {};
 
-    const { data: submission, error } = await this.client.rpc<EvidenceSubmissionResult>(
+    const { data: submission, error } = await this.client.rpc<EvidenceSubmission>(
       'record_evidence_submission',
       {
         p_challenge_id: challengeId,
@@ -640,8 +631,8 @@ export class ChallengeEngine {
     const updatedChallenge = await this.getChallenge(challengeId);
 
     return {
-      submissionId: submission.submission_id,
-      challenge: { ...updatedChallenge, evidenceRound: submission.evidence_round },
+      submission,
+      challenge: updatedChallenge,
     };
   }
 

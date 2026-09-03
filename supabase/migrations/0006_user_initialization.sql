@@ -7,44 +7,37 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-    v_exists boolean;
+    v_subscription_created boolean := false;
 BEGIN
-    -- Check if relationship state already exists to prevent duplicate initialization
-    SELECT EXISTS (
-        SELECT 1 FROM public.relationship_state WHERE user_id = p_user_id
-    ) INTO v_exists;
-
-    IF v_exists THEN
-        RETURN true; -- Already initialized
-    END IF;
-
-    -- Initialize relationship state
+    -- Each insert is independently idempotent so a partially initialized user
+    -- can safely resume setup after a retry or an older deployment.
     INSERT INTO public.relationship_state (
         user_id, respect, warmth, trust, rivalry, familiarity, curiosity, mode, updated_at
     ) VALUES (
         p_user_id, 0, 0, 0, 0, 0, 0, 'adaptive', now()
-    );
+    ) ON CONFLICT (user_id) DO NOTHING;
 
-    -- Initialize subscription to free tier
+    -- A free user has no external billing-provider identifiers.
     INSERT INTO public.subscriptions (
-        user_id, tier, status, current_period_end, created_at, updated_at
+        user_id, lemon_squeezy_id, customer_id, status, variant_id,
+        current_period_ends_at, tier, created_at, updated_at
     ) VALUES (
-        p_user_id, 'free', 'active', now() + interval '100 years', now(), now()
-    );
+        p_user_id, NULL, NULL, 'active', NULL, NULL, 'free', now(), now()
+    ) ON CONFLICT (user_id) DO NOTHING
+    RETURNING true INTO v_subscription_created;
 
-    -- Initialize usage counters (increment_usage_and_check does this via upsert, but safe to initialize)
+    -- The usage RPC also upserts this row, but an explicit zero bucket keeps
+    -- the visible allowance coherent from the first session.
     INSERT INTO public.usage_counters (
-        user_id, interaction_count, challenge_count, reset_at, created_at, updated_at
+        user_id, period, interaction_count, challenge_count, token_count, created_at, updated_at
     ) VALUES (
-        p_user_id, 0, 0, now() + interval '1 month', now(), now()
-    );
+        p_user_id, CURRENT_DATE, 0, 0, 0, now(), now()
+    ) ON CONFLICT (user_id, period) DO NOTHING;
 
-    -- Record initialization event
-    INSERT INTO public.events (
-        user_id, event_type, payload
-    ) VALUES (
-        p_user_id, 'subscription_created', '{"message": "User state initialized", "source": "system"}'::jsonb
-    );
+    IF v_subscription_created THEN
+        INSERT INTO public.events (user_id, event_type, payload)
+        VALUES (p_user_id, 'subscription_created', '{"tier": "free", "source": "system"}'::jsonb);
+    END IF;
 
     RETURN true;
 END;

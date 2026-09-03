@@ -142,6 +142,29 @@ describe('ChallengeEngine', () => {
             return { data: ch, error: null };
           }
         }
+        if (fn === 'issue_challenge') {
+          const id = 'ch-' + (Object.keys(challengesTable).length + 1);
+          const ch = {
+            id,
+            user_id: params.p_user_id,
+            goal_id: params.p_goal_id,
+            title: params.p_title,
+            description: params.p_description,
+            difficulty: params.p_difficulty,
+            status: 'issued',
+            parameters: params.p_parameters,
+            created_at: '2026-08-29T00:00:00.000Z',
+            updated_at: '2026-08-29T00:00:00.000Z'
+          };
+          challengesTable[id] = ch;
+          eventsTable.push({
+            id: 'evt-' + Date.now(),
+            user_id: params.p_user_id,
+            event_type: 'challenge_issued',
+            payload: { challenge_id: id }
+          });
+          return { data: ch, error: null };
+        }
         if (fn === 'record_evidence_submission') {
           const ch = challengesTable[params.p_challenge_id];
           if (ch) {
@@ -162,7 +185,19 @@ describe('ChallengeEngine', () => {
             evidenceTable[params.p_challenge_id] = list;
             ch.status = 'evidence_submitted';
             ch.parameters = { ...ch.parameters, evidence_round: round };
-            return { data: { submission_id: subId, evidence_round: round }, error: null };
+            return {
+              data: {
+                id: subId,
+                challengeId: params.p_challenge_id,
+                userId: params.p_user_id,
+                round,
+                kind: params.p_kind || 'text',
+                content: params.p_content,
+                metadata: params.p_metadata,
+                submittedAt: '2026-08-29T00:00:00.000Z',
+              },
+              error: null
+            };
           }
         }
         if (fn === 'judge_challenge') {
@@ -327,13 +362,13 @@ describe('ChallengeEngine', () => {
       await engine.accept(ch.id, 'user-1');
       await engine.start(ch.id, 'user-1');
 
-      const { submissionId, challenge } = await engine.submitEvidence(ch.id, {
+      const { submission, challenge } = await engine.submitEvidence(ch.id, {
         userId: 'user-1',
         kind: 'image',
         content: 'strava_5km_screenshot.png',
       });
 
-      expect(submissionId).toBeDefined();
+      expect(submission.id).toBeDefined();
       expect(challenge.status).toBe('evidence_submitted');
       expect(challenge.evidenceRound).toBe(1);
       expect(mockClient.rpc).toHaveBeenCalledWith(

@@ -1,6 +1,6 @@
-# AI Rival MVP
+# Eclos
 
-Initial monorepo foundation for the AI Rival MVP.
+Eclos MVP monorepo. You are becoming. Something is watching.
 
 ## Architecture
 

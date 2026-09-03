@@ -198,12 +198,14 @@ CREATE INDEX IF NOT EXISTS idx_observations_user_created ON public.capability_ob
 CREATE TABLE IF NOT EXISTS public.subscriptions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
-    lemon_squeezy_id TEXT NOT NULL UNIQUE,
-    customer_id TEXT NOT NULL,
+    -- Free users are entitled before any billing provider is involved.
+    lemon_squeezy_id TEXT UNIQUE,
+    customer_id TEXT,
     status TEXT NOT NULL CHECK (status IN (
         'on_trial', 'active', 'paused', 'past_due', 'unpaid', 'cancelled', 'expired'
     )),
-    variant_id TEXT NOT NULL,
+    variant_id TEXT,
+    tier TEXT NOT NULL DEFAULT 'free' CHECK (tier IN ('free', 'paid')),
     current_period_ends_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()

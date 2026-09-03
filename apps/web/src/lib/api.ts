@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import { deriveProcessInsights, type Challenge, type DomainEvent, type PresenceDecision } from '@ai-rival/domain';
+import { deriveProcessInsights, type Challenge, type DomainEvent, type PresenceDecision, type PresenceInteraction } from '@ai-rival/domain';
 
 interface EventRow {
   id: string;
@@ -48,54 +48,56 @@ export async function ambientTurn(presenceDecision: PresenceDecision) {
   return data;
 }
 
+export async function rivalInteraction(interactionHook: PresenceInteraction, presenceDecision: PresenceDecision) {
+  await ensureSession();
+  const { data, error } = await supabase.functions.invoke('chat-turn', { body: { interactionHook, presenceDecision } });
+  if (error) throw error;
+  return data;
+}
+
 export async function acceptChallenge(challengeId: string) {
   await ensureSession();
-  const { error } = await supabase.rpc('transition_challenge_status', {
-    p_challenge_id: challengeId,
-    p_new_status: 'accepted',
-    p_metadata: {}
+  const { data, error } = await supabase.functions.invoke('challenge-action', {
+    body: { action: 'accept', challengeId }
   });
   if (error) throw error;
-  
-  const { error: startError } = await supabase.rpc('transition_challenge_status', {
-    p_challenge_id: challengeId,
-    p_new_status: 'started',
-    p_metadata: {}
-  });
-  if (startError) throw startError;
+  return data;
+}
 
-  const { error: attemptError } = await supabase.rpc('transition_challenge_status', {
-    p_challenge_id: challengeId,
-    p_new_status: 'attempted',
-    p_metadata: {}
+export async function startChallenge(challengeId: string) {
+  await ensureSession();
+  const { data, error } = await supabase.functions.invoke('challenge-action', {
+    body: { action: 'start', challengeId }
   });
-  if (attemptError) throw attemptError;
+  if (error) throw error;
+  return data;
+}
+
+export async function attemptChallenge(challengeId: string) {
+  await ensureSession();
+  const { data, error } = await supabase.functions.invoke('challenge-action', {
+    body: { action: 'attempt', challengeId }
+  });
+  if (error) throw error;
+  return data;
 }
 
 export async function declineChallenge(challengeId: string) {
   await ensureSession();
-  // We can just decline by closing or ignoring. 
-  // Wait, there's no native "declined" state in V1 challenge lifecycle, maybe 'closed' or 'abandoned'?
-  // We'll just transition to 'closed' for now if they decline.
-  const { error } = await supabase.rpc('transition_challenge_status', {
-    p_challenge_id: challengeId,
-    p_new_status: 'closed',
-    p_metadata: { reason: 'declined' }
-  });
-  if (error) throw error;
-}
-
-export async function submitEvidence(challengeId: string, content: string) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const { data, error } = await supabase.rpc('record_evidence_submission', {
-    p_challenge_id: challengeId,
-    p_user_id: user?.id,
-    p_content: content,
-    p_kind: 'text',
-    p_metadata: {}
+  const { data, error } = await supabase.functions.invoke('challenge-action', {
+    body: { action: 'decline', challengeId }
   });
   if (error) throw error;
   return data;
+}
+
+export async function submitEvidence(challengeId: string, content: string) {
+  await ensureSession();
+  const { data, error } = await supabase.functions.invoke('challenge-action', {
+    body: { action: 'submit_evidence', challengeId, params: { content } }
+  });
+  if (error) throw error;
+  return data.data; // { submission, challenge }
 }
 
 export async function checkJudgment(challengeId: string) {

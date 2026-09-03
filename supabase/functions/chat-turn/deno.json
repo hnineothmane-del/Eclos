@@ -1,0 +1,5 @@
+{
+  "imports": {
+    "@ai-rival/domain": "../../../packages/domain/dist/index.js"
+  }
+}

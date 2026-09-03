@@ -12,12 +12,17 @@ import type { PresenceDecision } from './presenceEngine.js';
 import { inferChallengeDomain, selectChallengePrimitive, type ChallengeOutcome, type ChallengePrimitive, type ChallengeSelection } from '../challenge/challengeSelector.js';
 import { deriveRivalMemories, type RivalMemory } from './rivalMemory.js';
 import { selectRivalMemory, type SelectedMemory } from './rivalMemorySelector.js';
-import { deriveRivalInsights, type RivalInsight } from './rivalInsights.js';
+import { deriveRivalInsights } from './rivalInsights.js';
 import { selectRivalInsight, type SelectedInsight } from './rivalInsightSelector.js';
-import { deriveAgencyDecision, type RivalInitiativeDecision } from './rivalAgency.js';
-import { deriveRivalLivingState, type RivalLivingState, type RivalInteractionHook } from './rivalLivingState.js';
+import { deriveAgencyDecision } from './rivalAgency.js';
+import { deriveRivalLivingState, type RivalInteractionHook } from './rivalLivingState.js';
 import { deriveInteractionOutcome, extractInteractionRecords, type InteractionOutcome } from './rivalInteraction.js';
-import { deriveSituationalContext, type RivalSituationalContext } from './rivalSituationalContext.js';
+import { deriveSituationalContext } from './rivalSituationalContext.js';
+import { deriveSessionContinuity, type RivalSessionContinuity } from './rivalSessionContinuity.js';
+import { deriveRivalEasterEgg, type RivalEasterEggDecision } from './rivalEasterEgg.js';
+import { deriveRivalLore, type RivalLoreDecision } from './rivalLore.js';
+import { deriveExternalContextRequest, retrieveVerifiedExternalContext, type ExternalContextProvider, type VerifiedExternalContext } from './liveContext.js';
+import { deriveRivalRelationshipContext, type RivalRelationshipContext } from './rivalRelationshipContext.js';
 
 const RESPONSE_MODES = ['roast', 'observational_roast', 'challenge', 'judgment', 'grudging_praise', 'serious', 'supportive', 'banter', 'bored', 'curious', 'help', 'meta_rejection'] as const;
 const HUMOR_MECHANISMS = ['deadpan', 'mock_formal', 'absurd_escalation', 'observational', 'contextual_roast', 'callback', 'running_joke', 'irony', 'sarcasm', 'wit', 'nonsense', 'anti_climax', 'self_aware', 'self_deprecation', 'unexpected_praise', 'strategic_silence'] as const;
@@ -34,10 +39,10 @@ export interface ProcessCapture {
   timestamp: string;
 }
 
-export interface PlanTurnOptions { userId: string; userInput: string; activeChallenge?: Challenge | null; presenceDecision?: PresenceDecision | null; processCaptures?: ProcessCapture[]; interactionHook?: RivalInteractionHook; }
+export interface PlanTurnOptions { userId: string; userInput: string; activeChallenge?: Challenge | null; presenceDecision?: PresenceDecision | null; processCaptures?: ProcessCapture[]; interactionHook?: RivalInteractionHook; nowIso?: string; }
 export interface AmbientTurnOptions { userId: string; presenceDecision: PresenceDecision; activeChallenge?: Challenge | null; }
-export interface PlanTurnDependencies { modelRouter: ModelRouter; relationshipStore: IRelationshipStateStore; memoryStore: IMemoryStore; humorStore: IHumorStateStore; eventStore?: import('../store/index.js').IEventStore; }
-export interface PlannedResponse extends AIResponseContract { challengeSelection?: ChallengeSelection | null; }
+export interface PlanTurnDependencies { modelRouter: ModelRouter; relationshipStore: IRelationshipStateStore; memoryStore: IMemoryStore; humorStore: IHumorStateStore; eventStore?: import('../store/index.js').IEventStore; externalContextProvider?: ExternalContextProvider; }
+export interface PlannedResponse extends AIResponseContract { challengeSelection?: ChallengeSelection | null; easterEgg?: RivalEasterEggDecision | null; lore?: RivalLoreDecision | null; liveContext?: VerifiedExternalContext | null; relationshipContext?: RivalRelationshipContext; }
 
 
 function hasAny(input: string, terms: readonly string[]): boolean { return terms.some((term) => input.includes(term)); }
@@ -76,12 +81,14 @@ export class ResponsePlanner {
   /** Renders a concrete deterministic ambient event only; silence costs zero AI calls. */
   async planAmbientTurn(options: AmbientTurnOptions): Promise<PlannedResponse | null> {
     if (!options.presenceDecision.action) return null;
-    return this.planTurn({ userId: options.userId, userInput: '', activeChallenge: options.activeChallenge, presenceDecision: options.presenceDecision });
+    return this.planTurn({ userId: options.userId, userInput: '', activeChallenge: options.activeChallenge, presenceDecision: options.presenceDecision, nowIso: options.presenceDecision.generatedAt });
   }
   async planTurn(options: PlanTurnOptions): Promise<PlannedResponse | null> {
     const { userId, userInput, activeChallenge, presenceDecision } = options;
+    const nowIso = options.nowIso || presenceDecision?.generatedAt || new Date().toISOString();
     const relationship = await this.deps.relationshipStore.get(userId);
     if (!relationship) throw new Error('Relationship state not found for user');
+    const relationshipContext = deriveRivalRelationshipContext(relationship);
     const memories = await this.deps.memoryStore.retrieveRelevant(userId, { tags: [userInput], topK: 3 });
     const recentHumor = await this.deps.humorStore.recentMechanisms(userId);
 
@@ -111,7 +118,17 @@ export class ResponsePlanner {
       processInsights: processInsights || [],
       recentHumor,
       presenceDecision,
+      relationshipContext,
     });
+
+    const liveContextRequest = deriveExternalContextRequest({
+      userInput,
+      nowIso,
+      activeChallenge: activeChallenge ?? null,
+      presenceAction: presenceDecision?.action ?? null,
+      serious: characterPlan.state.seriousness >= 7,
+    });
+    const liveContext = await retrieveVerifiedExternalContext(this.deps.externalContextProvider, liveContextRequest);
 
     // ── Rival Memory derivation (pure, deterministic, zero AI calls) ──────────
     let rivalMemories: RivalMemory[] = [];
@@ -128,7 +145,7 @@ export class ResponsePlanner {
         processInsights: processInsights || [],
         recentEvents: allEvents,
         existingMemories: existingMemoryItems,
-        nowIso: new Date().toISOString(),
+        nowIso,
         userId,
       });
       rivalMemories = memDerivation.newMemories;
@@ -143,7 +160,7 @@ export class ResponsePlanner {
             key: mem.key,
             value: JSON.stringify({ description: mem.description, verbatimQuote: mem.verbatimQuote, epistemicStatus: mem.epistemicStatus, provenance: mem.provenance }),
             strength: Math.round(mem.confidence * 100),
-            expiresAt: mem.type === 'unresolved' ? null : mem.type === 'factual' ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : null,
+            expiresAt: mem.type === 'unresolved' ? null : mem.type === 'factual' ? new Date(new Date(nowIso).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString() : null,
           }).catch(() => { /* non-blocking */ });
         }
       }
@@ -175,7 +192,7 @@ export class ResponsePlanner {
         isChallengeCritical,
         recentHumor,
         recentlySurfacedKeys: [],
-        nowIso: new Date().toISOString(),
+        nowIso,
       });
     }
 
@@ -190,7 +207,7 @@ export class ResponsePlanner {
         allEvents,
         rivalMemories,
         processInsights: processInsights || [],
-        nowIso: new Date().toISOString(),
+        nowIso,
         userId,
       });
 
@@ -206,7 +223,7 @@ export class ResponsePlanner {
         isSeriousContext,
         isChallengeCritical,
         recentlySurfacedInsightKeys: [],
-        nowIso: new Date().toISOString(),
+        nowIso,
       });
     }
 
@@ -225,19 +242,22 @@ export class ResponsePlanner {
         .map((event) => (event.payload as { verdict?: unknown }).verdict)
         .filter((outcome): outcome is ChallengeOutcome => outcome === 'passed' || outcome === 'failed' || outcome === 'needs_more_evidence');
     }
+    const continuityEvents = this.deps.eventStore ? await this.deps.eventStore.recentForUser(userId, 200) : [];
+    const sessionContinuity: RivalSessionContinuity = deriveSessionContinuity({ nowIso, userInput, activeChallenge: activeChallenge ?? null, events: continuityEvents });
     const agencyDecision = deriveAgencyDecision({
-      allEvents: this.deps.eventStore ? await this.deps.eventStore.recentForUser(userId, 200) : [],
+      allEvents: continuityEvents,
       userInput,
       activeChallenge: activeChallenge ?? null,
-      presence: presenceDecision ?? { state: 'active', activity: 'watching', attention: 'ignore', action: null, reason: 'no_worthy_event', sourceEventIds: [], generatedAt: new Date().toISOString() },
+      presence: presenceDecision ?? { state: 'active', activity: 'watching', attention: 'ignore', action: null, reason: 'no_worthy_event', sourceEventIds: [], generatedAt: nowIso },
       relationship,
       characterPlan,
       selectedMemory: selectedRivalMemory,
       selectedInsight,
       processInsights: processInsights || [],
-      recentInitiatives: this.deps.eventStore ? await this.deps.eventStore.recentForUser(userId, 200) : [],
+      recentInitiatives: continuityEvents,
       interactionHook: options.interactionHook ?? null,
-      nowIso: new Date().toISOString(),
+      nowIso,
+      relationshipContext,
     });
 
     if (!userInput && agencyDecision.action === 'QUIET') {
@@ -266,9 +286,9 @@ export class ResponsePlanner {
 
     // Derive living state (pure, zero AI calls) and pass into prompt builder
     const rivalLivingState = deriveRivalLivingState(
-      presenceDecision ?? { state: 'active', activity: 'watching', attention: 'ignore', action: null, reason: 'no_worthy_event', sourceEventIds: [], generatedAt: new Date().toISOString() },
+      presenceDecision ?? { state: 'active', activity: 'watching', attention: 'ignore', action: null, reason: 'no_worthy_event', sourceEventIds: [], generatedAt: nowIso },
       agencyDecision,
-      new Date().toISOString(),
+      nowIso,
     );
 
     // ── Interaction Outcome (T28) ─────────────────────────────────────────────
@@ -276,31 +296,33 @@ export class ResponsePlanner {
     // resolve it deterministically. If visual-only → 0 AI calls → return null
     // with the outcome attached for UI consumption.
     let interactionOutcome: InteractionOutcome | null = null;
+    let easterEgg: RivalEasterEggDecision | null = null;
     if (options.interactionHook) {
       const allEventsForInteraction = this.deps.eventStore
         ? await this.deps.eventStore.recentForUser(userId, 50)
         : [];
-      interactionOutcome = deriveInteractionOutcome({
-        interaction: options.interactionHook,
-        livingState: rivalLivingState,
-        presence: presenceDecision ?? { state: 'active', activity: 'watching', attention: 'ignore', action: null, reason: 'no_worthy_event', sourceEventIds: [], generatedAt: new Date().toISOString() },
-        relationship,
-        activeChallenge: activeChallenge ?? null,
-        recentInteractions: extractInteractionRecords(allEventsForInteraction),
-        nowIso: new Date().toISOString(),
-      });
+      easterEgg = deriveRivalEasterEgg({ nowIso, interaction: options.interactionHook, relationship, livingState: rivalLivingState, activeChallenge: activeChallenge ?? null, serious: characterPlan.state.seriousness >= 7, events: allEventsForInteraction });
+      interactionOutcome = easterEgg.authorized
+        ? { reaction: 'startled', speechAuthorized: true, visualOnly: false, hiddenConditionMet: true, cooldownKey: 'caught_occupied', reason: easterEgg.reason }
+        : deriveInteractionOutcome({
+            interaction: options.interactionHook,
+            livingState: rivalLivingState,
+            presence: presenceDecision ?? { state: 'active', activity: 'watching', attention: 'ignore', action: null, reason: 'no_worthy_event', sourceEventIds: [], generatedAt: nowIso },
+            relationship,
+            activeChallenge: activeChallenge ?? null,
+            recentInteractions: extractInteractionRecords(allEventsForInteraction),
+            nowIso,
+          });
 
-      // Persist the interaction event so cooldowns work across turns
+      // Persist either the one-time discovery or the ordinary interaction.
       if (this.deps.eventStore) {
         await this.deps.eventStore.append({
           userId,
-          eventType: 'rival_interaction' as any,
-          source: 'user_action',
-          payload: {
-            interactionType: interactionOutcome.cooldownKey,
-            reaction: interactionOutcome.reaction,
-            speechAuthorized: interactionOutcome.speechAuthorized,
-          },
+          eventType: easterEgg.authorized ? 'rival_easter_egg_discovered' : 'rival_interaction' as any,
+          source: easterEgg.authorized ? 'system' : 'user_action',
+          payload: easterEgg.authorized
+            ? { id: easterEgg.id, sourceInteractionEventIds: easterEgg.sourceEventIds }
+            : { interactionType: interactionOutcome.cooldownKey, reaction: interactionOutcome.reaction, speechAuthorized: interactionOutcome.speechAuthorized },
         });
       }
 
@@ -320,10 +342,31 @@ export class ResponsePlanner {
       agencyDecision,
       interactionOutcome,
       characterPlan,
-      nowIso: new Date().toISOString(),
+      nowIso,
+      continuity: sessionContinuity,
     });
 
-    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, characterPlan, challengeSelection, presenceDecision, processCaptures, processInsights, selectedRivalMemory, selectedInsight, agencyDecision, rivalLivingState, interactionOutcome, situationalContext })));
+    const lore = deriveRivalLore({
+      nowIso,
+      userInput,
+      relationship,
+      livingState: rivalLivingState,
+      activeChallenge: activeChallenge ?? null,
+      serious: characterPlan.state.seriousness >= 7,
+      easterEgg,
+      events: continuityEvents,
+      relationshipContext,
+    });
+    if (lore.newlyRevealed && lore.fact && this.deps.eventStore) {
+      await this.deps.eventStore.append({
+        userId,
+        eventType: 'rival_lore_revealed',
+        source: 'system',
+        payload: { loreId: lore.fact.id, category: lore.fact.category, revealLevel: lore.revealLevel, sourceEventIds: lore.sourceEventIds },
+      });
+    }
+
+    const aiResponse = validateAIResponseContract(await this.deps.modelRouter.forChat().generate(buildCharacterPrompt({ userInput, relationship, activeChallenge, decision, characterPlan, challengeSelection, presenceDecision, processCaptures, processInsights, selectedRivalMemory, selectedInsight, agencyDecision, rivalLivingState, interactionOutcome, situationalContext, sessionContinuity, easterEgg, lore, liveContext, relationshipContext })));
     for (const candidate of aiResponse.memoryCandidates || []) {
       if (isGroundedMemory(candidate, userInput, activeChallenge)) await this.deps.memoryStore.write({ userId, tier: candidate.tier, category: candidate.category, key: candidate.key, value: candidate.value, strength: Math.floor(candidate.confidence * 100) });
     }
@@ -336,11 +379,15 @@ export class ResponsePlanner {
         payload: {
           category: agencyDecision.action,
           reason: agencyDecision.reason,
+          sourceEventIds: agencyDecision.sourceEventIds,
+          sourceMemoryKeys: agencyDecision.sourceMemoryKeys,
+          sourceInsightKeys: agencyDecision.sourceInsightKeys,
+          presenceEvent: presenceDecision?.action ?? null,
         }
       });
     }
     // Event suggestions are advisory only and deliberately have no generic persistence path.
-    return { ...aiResponse, humorMechanism: decision.humorMechanism, register: decision.register, seriousFlag: decision.serious, challengeSelection };
+    return { ...aiResponse, humorMechanism: decision.humorMechanism, register: decision.register, seriousFlag: decision.serious, challengeSelection, easterEgg, lore, liveContext, relationshipContext };
   }
 }
 

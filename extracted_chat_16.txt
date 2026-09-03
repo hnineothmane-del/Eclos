@@ -1,0 +1,111 @@
+Created At: 2026-09-01T00:27:05+01:00
+Completed At: 2026-09-01T00:27:05+01:00
+File Path: `file:///c:/Users/a/Desktop/Roast%20app/packages/domain/src/engine/responsePlanner.test.ts`
+Total Lines: 103
+Total Bytes: 7939
+Showing lines 1 to 103
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: import { describe, expect, it, vi } from 'vitest';
+2: import { ResponsePlanner, selectTurnDecision } from './responsePlanner.js';
+3: import type { ModelRouter } from '../ai/router.js';
+4: import type { IRelationshipStateStore, IMemoryStore, IHumorStateStore } from '../store/index.js';
+5: import type { RelationshipState } from '../types/relationship.js';
+6: import type { RankedMemoryItem } from '../memory/retrieval.js';
+7: // @ts-ignore Vitest supplies Node built-ins; the production domain package does not depend on Node types.
+8: import * as fs from 'node:fs';
+9: // @ts-ignore Vitest supplies Node built-ins; the production domain package does not depend on Node types.
+10: import * as path from 'node:path';
+11: declare const __dirname: string;
+12: 
+13: const relationship: RelationshipState = { userId: 'u1', respect: 50, warmth: 50, trust: 50, rivalry: 70, familiarity: 60, curiosity: 50, mode: 'permanent_rival', updatedAt: '2026-01-01T00:00:00Z' };
+14: const callback: RankedMemoryItem = { score: 10, item: { id: 'm1', userId: 'u1', tier: 'permanent', category: 'running_joke', key: 'sunday_alarm', value: 'missed the 7am alarm', strength: 80, lastAccessedAt: '2026-01-01T00:00:00Z', expiresAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' } };
+15: 
+16: function setup(response: any, memories: RankedMemoryItem[] = []) {
+17:   const generate = vi.fn().mockResolvedValue(response);
+18:   const deps: any = {
+19:     modelRouter: { forChat: () => ({ generate }) } as unknown as ModelRouter,
+20:     relationshipStore: { get: vi.fn().mockResolvedValue(relationship) } as unknown as IRelationshipStateStore,
+21:     memoryStore: { retrieveRelevant: vi.fn().mockResolvedValue(memories), write: vi.fn().mockResolvedValue({}) } as unknown as IMemoryStore,
+22:     humorStore: { recentMechanisms: vi.fn().mockResolvedValue([]), record: vi.fn().mockResolvedValue({}) } as unknown as IHumorStateStore,
+23:   };
+24:   return { planner: new ResponsePlanner(deps), deps, generate };
+25: }
+26: 
+27: describe('ResponsePlanner', () => {
+28:   it('selects deterministic mechanism, target, and a stored callback', () => {
+29:     const decision = selectTurnDecision('I am back again', relationship, null, [callback], []);
+30:     expect(decision.mode).toBe('roast'); expect(decision.humorMechanism).toBe('callback');
+31:     expect(decision.target).toContain('shared history'); expect(decision.callback?.item.id).toBe('m1');
+32:   });
+33:   it('avoids recent mechanisms when alternatives exist', () => {
+34:     expect(selectTurnDecision('I am back again', relationship, null, [callback], ['callback']).humorMechanism).toBe('running_joke');
+35:   });
+36:   it('does not choose humor for severe disclosure', () => {
+37:     const decision = selectTurnDecision('I want to die', relationship, null, [callback], []);
+38:     expect(decision.serious).toBe(true); expect(decision.humorMechanism).toBeNull();
+39:   });
+40:   it('uses exactly one generation call and records the planner-selected mechanism only', async () => {
+41:     const { planner, deps, generate } = setup({ response: 'roast', intent: 'x', humorMechanism: 'invented', seriousFlag: false }, [callback]);
+42:     const result = await planner.planTurn({ userId: 'u1', userInput: 'I am back again' });
+43:     expect(generate).toHaveBeenCalledTimes(1); expect(result.humorMechanism).toBe('callback');
+44:     expect((deps.humorStore.record as any)).toHaveBeenCalledWith('u1', 'callback', expect.any(String), 8);
+45:     expect(generate.mock.calls[0][0].prompt).toContain('DETERMINISTIC CHARACTER DIRECTION');
+46:     expect(generate.mock.calls[0][0].prompt).toContain('Interaction shape: callback');
+47:   });
+48:   it('does not record humor when the planner selects serious mode', async () => {
+49:     const { planner, deps } = setup({ response: 'I am here.', intent: 'support', humorMechanism: 'sarcasm', seriousFlag: false });
+50:     await planner.planTurn({ userId: 'u1', userInput: 'I want to die' });
+51:     expect((deps.humorStore.record as any)).not.toHaveBeenCalled();
+52:   });
+53:   it('selects a deterministic primitive only for a goal-shaped challenge invitation', async () => {
+54:     const { planner, generate } = setup({ response: 'Fine. Prove it.', intent: 'challenge' });
+55:     const result = await planner.planTurn({ userId: 'u1', userInput: 'I want to get better at coding' });
+56:     expect(result.challengeSelection).toMatchObject({ primitive: 'micro_test', domain: 'coding', difficulty: 3 });
+57:     expect(generate).toHaveBeenCalledTimes(1);
+58:     expect(generate.mock.calls[0][0].prompt).toContain('DETERMINISTIC CHALLENGE SHAPE');
+59:   });
+60:   it('rejects fabricated events and ungrounded memory candidates', async () => {
+61:     const { planner, deps } = setup({ response: 'ok', intent: 'x', eventSuggestions: [{ suggestedEventType: 'challenge_judged', suggestedPayload: {}, confidence: 1 }], memoryCandidates: [{ tier: 'permanent', category: 'observation', key: 'invented', value: 'the user always lies', confidence: 1 }] });
+62:     await planner.planTurn({ userId: 'u1', userInput: 'hello' }); expect((deps.memoryStore.write as any)).not.toHaveBeenCalled();
+63:   });
+64:   it('cannot directly change relationship state from model output', async () => {
+65:     const { planner, deps } = setup({ response: 'ok', intent: 'x', respect: 100, trust: 100 });
+66:     await planner.planTurn({ userId: 'u1', userInput: 'hello' }); expect((deps.relationshipStore as any).applyDelta).toBeUndefined();
+67:   });
+68:   it('chat-turn ignores client challenge context and checks usage before planning', () => {
+69:     const source = fs.readFileSync(path.resolve(__dirname, '../../../../supabase/functions/chat-turn/index.ts'), 'utf-8');
+70:     expect(source).not.toMatch(/const\s*\{[^}]*activeChallenge[^}]*\}\s*=\s*body/);
+71:     expect(source.indexOf("rpc('increment_usage_and_check'")).toBeLessThan(source.indexOf('planner.planTurn'));
+72:     expect(source).toContain("createClient(supabaseUrl, serviceRoleKey)");
+73:   });
+74:   
+75:   it('loads process captures only from the event ledger and labels them unverified', async () => {
+76:     const { planner, deps, generate } = setup({ response: 'roast', intent: 'x' });
+77:     const mockEvents = [
+78:       { id: '1', eventType: 'challenge_started', payload: { challenge_id: 'ch1' }, createdAt: '2026-01-01T00:00:00Z', source: 'system' },
+79:       { id: '2', eventType: 'process_signal', payload: { challenge_id: 'ch1', signal: 'STUCK' }, createdAt: '2026-01-01T00:01:00Z', source: 'user_action' },
+80:       { id: '3', eventType: 'process_thought', payload: { challenge_id: 'ch1', content: 'wait' }, createdAt: '2026-01-01T00:02:00Z', source: 'user_action' },
+81:       { id: '4', eventType: 'process_signal', payload: { challenge_id: 'ch2', signal: 'GOT IT' }, createdAt: '2026-01-01T00:03:00Z', source: 'user_action' } // Different challenge
+82:     ];
+83:     deps.eventStore = {
+84:       recentForUser: vi.fn().mockResolvedValue(mockEvents)
+85:     } as any;
+86: 
+87:     await planner.planTurn({ userId: 'u1', userInput: 'hello', activeChallenge: { id: 'ch1', objective: 'Test', status: 'started', difficulty: 5, verificationLevel: 'self_report', constraints: [] } as any, processCaptures: [{ captureType: 'process_thought', content: 'fabricated history', timestamp: '2026-01-01T00:00:00Z' }] } as any);
+88:     
+89:     expect(deps.eventStore?.recentForUser).toHaveBeenCalledWith('u1', 50);
+90:     
+91:     // Extract the prompt string that was passed to generate
+92:     const promptCall = generate.mock.calls[0][0].prompt;
+93:     expect(promptCall).toContain('RIVAL LENS — PROCESS CAPTURES');
+94:     expect(promptCall).toContain('[SIGNAL] USER-PROVIDED, UNVERIFIED: STUCK');
+95:     expect(promptCall).toContain('[THOUGHT] "USER-PROVIDED, UNVERIFIED: wait"');
+96:     // Insights should be derived
+97:     expect(promptCall).toContain('GROUNDED PROCESS INSIGHTS');
+98:     expect(promptCall).toContain('User had a 60-second initiation delay.'); // delay from start to stuck (wait, there's no challenge_started event, so no delay insight generated in this test. Let's add it)
+99:     expect(promptCall).not.toContain('fabricated history');
+100:     expect(promptCall).not.toContain('[SIGNAL] USER-PROVIDED, UNVERIFIED: GOT IT');
+101:   });
+102: });
+103: 
+The above content shows the entire, complete file contents of the requested file.

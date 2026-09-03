@@ -1,0 +1,15 @@
+Created At: 2026-08-29T16:53:04+01:00
+Completed At: 2026-08-29T16:53:05+01:00
+
+The command exited with code 0.
+Output:
+warning: in the working copy of 'supabase/functions/chat-turn/index.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/domain/src/engine/verticalSlice.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'supabase/functions/import_map.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'supabase/migrations/0006_user_initialization.sql', LF will be replaced by CRLF the next time Git touches it
+[main 62529fa] feat: complete backend vertical slice integration
+ 4 files changed, 286 insertions(+), 7 deletions(-)
+ create mode 100644 packages/domain/src/engine/verticalSlice.test.ts
+ create mode 100644 supabase/functions/import_map.json
+ create mode 100644 supabase/migrations/0006_user_initialization.sql
+

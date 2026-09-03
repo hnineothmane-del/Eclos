@@ -1,0 +1,39 @@
+Created At: 2026-09-03T23:22:48+01:00
+Completed At: 2026-09-03T23:22:48+01:00
+File Path: `file:///c:/Users/a/Desktop/Roast%20app/supabase/functions/chat-turn/index.ts`
+Total Lines: 155
+Total Bytes: 8478
+Showing lines 120 to 150
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+120:           userId: user.id,
+121:           domain: selection.domain,
+122:           objective: selection.objective,
+123:           difficulty: selection.difficulty,
+124:           constraints: selection.constraints,
+125:           expectedDurationMinutes: selection.expectedDurationMinutes,
+126:           verificationLevel: selection.verificationLevel,
+127:           hypothesis: `Selected primitive: ${selection.primitive}`,
+128:           primitive: selection.primitive,
+129:         });
+130:       } catch (e) {
+131:         console.error('Failed to issue deterministic challenge:', e);
+132:       }
+133:     }
+134: 
+135:     return json({
+136:       response: aiResponse.response,
+137:       intent: aiResponse.intent,
+138:       mode: aiResponse.register,
+139:       humorMechanism: aiResponse.humorMechanism,
+140:       seriousFlag: aiResponse.seriousFlag,
+141:       ambient: !!ambientDecision,
+142:       easterEgg: aiResponse.easterEgg?.authorized ? { id: aiResponse.easterEgg.id, visualCue: aiResponse.easterEgg.visualCue } : null,
+143:       entitlement: {
+144:         tier: usage?.tier === 'paid' ? 'paid' : 'free',
+145:         active: Boolean(usage?.active),
+146:         dailyLimit: Number(usage?.daily_limit || 0),
+147:         currentInteractions: Number(usage?.current_interactions || 0),
+148:       },
+149:     });
+150:   } catch (error) {
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

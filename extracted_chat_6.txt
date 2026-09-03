@@ -1,0 +1,23 @@
+Created At: 2026-08-29T16:41:54+01:00
+Completed At: 2026-08-29T16:41:55+01:00
+File Path: `file:///c:/Users/a/Desktop/Roast%20app/supabase/functions/chat-turn/index.ts`
+Total Lines: 101
+Total Bytes: 5574
+Showing lines 1 to 15
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+2: import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+3: // Supabase CLI bundles these local TypeScript modules with the function entrypoint.
+4: import { ResponsePlanner } from '../../../packages/domain/src/engine/responsePlanner.ts';
+5: import { DefaultModelRouter } from '../../../packages/domain/src/ai/router.ts';
+6: import { SupabaseRelationshipStateStore, SupabaseMemoryStore, SupabaseHumorStateStore } from '../../../packages/domain/src/store/index.ts';
+7: 
+8: const corsHeaders = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
+9: const activeStatuses = ['accepted', 'started', 'attempted', 'evidence_submitted', 'needs_more_evidence'];
+10: 
+11: function json(body: Record<string, unknown>, status = 200) {
+12:   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+13: }
+14: 
+15: function mapChallenge(row: Record<string, any>) {
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

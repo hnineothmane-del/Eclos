@@ -1,0 +1,14 @@
+Created At: 2026-09-03T22:51:42+01:00
+Completed At: 2026-09-03T22:51:43+01:00
+
+The command exited with code 1.
+Output:
+grep : The term 'grep' is not recognized as the name of a cmdlet, function, script file, or operable program. Check 
+the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:45
++ cat supabase/functions/chat-turn/index.ts | grep -C 5 "supabaseClient ...
++                                             ~~~~
+    + CategoryInfo          : ObjectNotFound: (grep:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+

@@ -1,0 +1,808 @@
+Created At: 2026-08-29T15:36:06+01:00
+Completed At: 2026-08-29T15:36:06+01:00
+File Path: `file:///c:/Users/a/Desktop/Roast%20app/task8_full.txt`
+Total Lines: 2225
+Total Bytes: 42276
+Showing lines 1 to 800
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: <USER_REQUEST>
+2: # AI RIVAL — TASK 7
+3: 
+4: ## Implement Challenge Engine
+5: 
+6: Tasks 1–6 are complete and committed.
+7: 
+8: Read the current repository, especially:
+9: 
+10: ```text
+11: packages/domain/src/types/
+12: packages/domain/src/engine/
+13: packages/domain/src/challenge/
+14: packages/domain/src/store/
+15: packages/domain/src/ai/
+16: supabase/migrations/
+17: ```
+18: 
+19: ## OBJECTIVE
+20: 
+21: Implement the domain-level `ChallengeEngine` that orchestrates the existing V1 challenge system.
+22: 
+23: The engine must connect:
+24: 
+25: ```text id="h3r1ws"
+26: issue
+27: → negotiate
+28: → accept
+29: → start
+30: → attempt
+31: → submit evidence
+32: → evaluate
+33: → apply deterministic relationship changes
+34: → close
+35: ```
+36: 
+37: The engine is orchestration only.
+38: 
+39: Do NOT redesign:
+40: 
+41: * RespectEngine
+42: * lifecycle rules
+43: * difficulty rules
+44: * memory ranking
+45: * AI provider
+46: * database schema
+47: * product behavior
+48: 
+49: ---
+50: 
+51: # FILE
+52: 
+53: Create:
+54: 
+55: ```text id="j0q55l"
+56: packages/domain/src/challenge/challengeEngine.ts
+57: packages/domain/src/challenge/challengeEngine.test.ts
+58: ```
+59: 
+60: Update relevant barrel exports only.
+61: 
+62: ---
+63: 
+64: # REQUIRED INTERFACE
+65: 
+66: Implement the existing `ChallengeEngine` contract where compatible with the current repository:
+67: 
+68: ```ts
+69: issue(userId, params)
+70: negotiate(challengeId, changes)
+71: accept(challengeId)
+72: start(challengeId)
+73: submitEvidence(challengeId, evidence)
+74: judge(challengeId)
+75: close(challengeId)
+76: suggestNextDifficulty(history)
+77: ```
+78: 
+79: Use the CURRENT domain types and store interfaces already present in the repository as the source of truth.
+80: 
+81: Do not create duplicate interfaces unnecessarily.
+82: 
+83: ---
+84: 
+85: # CORE RULES
+86: 
+87: ## 1. ISSUE
+88: 
+89: Create a new challenge with:
+90: 
+91: * userId
+92: * domain
+93: * objective
+94: * difficulty 1–10
+95: * constraints
+96: * expected duration
+97: * verification level
+98: * optional goalId
+99: * optional hypothesis
+100: * status = `issued`
+101: * evidenceRound = 0
+102: 
+103: Persist through the appropriate store.
+104: 
+105: Do not call AI here unless an existing interface explicitly requires it.
+106: 
+107: ---
+108: 
+109: ## 2. NEGOTIATE
+110: 
+111: Use the existing lifecycle validator.
+112: 
+113: Allowed:
+114: 
+115: ```text
+116: issued → negotiated
+117: negotiated → negotiated
+118: negotiated → accepted
+119: issued → accepted
+120: ```
+121: 
+122: Do not allow invalid transitions.
+123: 
+124: Validate changes before persistence.
+125: 
+126: Do not allow the user to alter:
+127: 
+128: * userId
+129: * challenge identity
+130: * authoritative history
+131: * prior evidence
+132: * relationship state
+133: * event history
+134: 
+135: The challenge's core terms may only change through the fields already allowed by the domain interface.
+136: 
+137: ---
+138: 
+139: ## 3. ACCEPT
+140: 
+141: Only:
+142: 
+143: ```text
+144: issued → accepted
+145: negotiated → accepted
+146: ```
+147: 
+148: Record the appropriate event through the existing event mechanism.
+149: 
+150: Do not change Respect merely for accepting a challenge.
+151: 
+152: ---
+153: 
+154: ## 4. START
+155: 
+156: Only:
+157: 
+158: ```text
+159: accepted → started
+160: ```
+161: 
+162: Record start if the current event model supports it.
+163: 
+164: Do not award Respect.
+165: 
+166: ---
+167: 
+168: ## 5. ATTEMPT
+169: 
+170: When the user begins/submits an attempt, move:
+171: 
+172: ```text
+173: started → attempted
+174: ```
+175: 
+176: Use the existing lifecycle validator.
+177: 
+178: Do not invent new lifecycle states.
+179: 
+180: ---
+181: 
+182: # 6. EVIDENCE
+183: 
+184: `submitEvidence()` must:
+185: 
+186: 1. verify challenge ownership
+187: 2. validate current challenge state
+188: 3. persist evidence
+189: 4. increment evidence round through the authoritative database mechanism
+190: 5. transition to `evidence_submitted`
+191: 6. record the appropriate event
+192: 
+193: Do NOT directly mutate relationship state.
+194: 
+195: Do not bypass the database RPC already implemented for evidence submission.
+196: 
+197: Support repeated evidence after:
+198: 
+199: ```text
+200: needs_more_evidence
+201: ```
+202: 
+203: ---
+204: 
+205: # 7. JUDGMENT
+206: 
+207: `judge(challengeId)` is the most important method.
+208: 
+209: It must:
+210: 
+211: 1. load the challenge
+212: 2. verify it belongs to the expected user/context
+213: 3. verify status is `evidence_submitted`
+214: 4. load the relevant/latest evidence submission
+215: 5. call `ModelRouter.forEvaluation()`
+216: 6. pass the challenge objective + verification level + evidence to the evaluator
+217: 7. validate the evaluator result
+218: 8. determine whether result is:
+219: 
+220:    * completed
+221:    * failed
+222:    * needs_more_evidence
+223: 9. compute deterministic relationship deltas using the existing `RespectEngine`
+224: 10. commit judgment + resulting event + relationship update + challenge transition atomically through the existing Postgres RPC
+225: 11. return the domain judgment
+226: 
+227: IMPORTANT:
+228: 
+229: The AI's confidence and reasoning are advisory.
+230: 
+231: The AI MUST NOT directly supply:
+232: 
+233: * respect delta
+234: * trust delta
+235: * warmth delta
+236: * rivalry delta
+237: * familiarity delta
+238: * curiosity delta
+239: * challenge status
+240: 
+241: The domain engine computes authoritative deltas.
+242: 
+243: Use the existing deterministic `computeDelta()` implementation.
+244: 
+245: ---
+246: 
+247: # 8. EFFORT SIGNAL
+248: 
+249: Use the existing deterministic `deriveEffortSignal()`.
+250: 
+251: Do NOT invent an LLM-generated authoritative effort score.
+252: 
+253: Construct the `EffortEvidence` input only from available observable challenge data.
+254: 
+255: If the current evidence format does not provide some fields:
+256: 
+257: * use safe defaults
+258: * do not fabricate measurements
+259: * do not invent hidden data
+260: 
+261: Document any unavailable signal briefly in code.
+262: 
+263: ---
+264: 
+265: # 9. RECOVERY
+266: 
+267: A recovery event may only receive recovery Respect if there is a genuine prior failure associated with the user's relevant challenge/goal context.
+268: 
+269: Use the existing deterministic rule:
+270: 
+271: ```text
+272: priorFailureConfirmed = true
+273: ```
+274: 
+275: before awarding recovery Respect.
+276: 
+277: Never manufacture a recovery from ordinary success.
+278: 
+279: ---
+280: 
+281: # 10. DIFFICULTY
+282: 
+283: After a judged challenge, expose/use:
+284: 
+285: ```text
+286: suggestNextDifficulty(...)
+287: ```
+288: 
+289: from the existing pure module.
+290: 
+291: Do NOT create a second difficulty algorithm.
+292: 
+293: Difficulty must remain 1–10.
+294: 
+295: The engine should preserve the distinction between:
+296: 
+297: * completed
+298: * failed with meaningful effort
+299: * failed with low effort
+300: * recovery
+301: 
+302: ---
+303: 
+304: # 11. ATOMICITY
+305: 
+306: Do not perform:
+307: 
+308: ```text
+309: judgment write
+310: → separate event write
+311: → separate relationship update
+312: → separate challenge update
+313: ```
+314: 
+315: as unrelated operations.
+316: 
+317: Use the existing authoritative Postgres RPC for the atomic judgment/state transition.
+318: 
+319: The database remains the final authority.
+320: 
+321: ---
+322: 
+323: # 12. IDEMPOTENCY / DOUBLE ACTIONS
+324: 
+325: Reject or safely no-op repeated invalid operations.
+326: 
+327: Examples:
+328: 
+329: ```text
+330: accepted → accepted       reject
+331: judged → judged           reject
+332: judged → evidence_submit  reject
+333: closed → anything         reject
+334: needs_more_evidence → judged  reject
+335: ```
+336: 
+337: Do not double-award Respect if `judge()` is accidentally called twice.
+338: 
+339: ---
+340: 
+341: # 13. ERROR HANDLING
+342: 
+343: Use clear typed/domain errors where the repository already has an error pattern.
+344: 
+345: At minimum distinguish:
+346: 
+347: * challenge not found
+348: * unauthorized owner
+349: * invalid lifecycle transition
+350: * evidence missing
+351: * already judged/closed
+352: * AI evaluation failure
+353: * persistence failure
+354: 
+355: Do not swallow errors.
+356: 
+357: ---
+358: 
+359: # 14. TESTS
+360: 
+361: Create comprehensive unit tests using fake/mocked stores and `FakeAIProvider`.
+362: 
+363: Must cover:
+364: 
+365: ### Issue
+366: 
+367: * valid challenge creation
+368: * defaults
+369: * difficulty bounds
+370: 
+371: ### Negotiation
+372: 
+373: * issued → negotiated
+374: * negotiated → negotiated
+375: * negotiated → accepted
+376: * invalid negotiation attempts
+377: 
+378: ### Accept / Start
+379: 
+380: * legal transitions
+381: * invalid transitions
+382: 
+383: ### Evidence
+384: 
+385: * owner verification
+386: * first evidence round
+387: * second evidence after `needs_more_evidence`
+388: * invalid evidence submission states
+389: 
+390: ### Judgment
+391: 
+392: * completed
+393: * failed
+394: * needs_more_evidence
+395: * malformed AI evaluator result
+396: * low confidence
+397: * deterministic Respect calculation
+398: * deterministic secondary relationship deltas
+399: * effort signal derivation
+400: * prior-failure recovery
+401: * double judgment prevention
+402: 
+403: ### Security / authority
+404: 
+405: Prove that AI-returned fields cannot directly set:
+406: 
+407: * respect
+408: * trust
+409: * relationship state
+410: * challenge status
+411: 
+412: ### Atomicity
+413: 
+414: Verify the engine invokes the authoritative judgment RPC rather than performing independent state mutations.
+415: 
+416: ---
+417: 
+418: # 15. IMPORTANT ARCHITECTURE BOUNDARY
+419: 
+420: Do NOT put into `ChallengeEngine`:
+421: 
+422: * AI personality generation
+423: * humor generation
+424: * response formatting
+425: * chat persistence
+426: * memory extraction
+427: * prompt construction
+428: * frontend behavior
+429: * billing
+430: * analytics
+431: 
+432: Those belong to later layers.
+433: 
+434: The Challenge Engine is:
+435: 
+436: > **challenge orchestration + evidence/judgment orchestration**
+437: 
+438: and nothing more.
+439: 
+440: ---
+441: 
+442: # 16. VALIDATION
+443: 
+444: Run:
+445: 
+446: ```bash id="nqwb4d"
+447: npm run typecheck -w packages/domain
+448: npm run test -w packages/domain
+449: npm run build -w packages/domain
+450: npm run test
+451: ```
+452: 
+453: If any existing test fails because Task 7 exposed a genuine interface mismatch, fix only what is strictly required and report it.
+454: 
+455: ---
+456: 
+457: # 17. COMPLETION CONTRACT
+458: 
+459: Return:
+460: 
+461: ### STATUS
+462: 
+463: COMPLETE / BLOCKED / PARTIAL
+464: 
+465: ### FILES CHANGED
+466: 
+467: Exact files.
+468: 
+469: ### CORE FLOW
+470: 
+471: Brief description of:
+472: `issue → negotiate → accept → start → attempt → evidence → judge → close`
+473: 
+474: ### AUTHORITY
+475: 
+476: Explain where:
+477: 
+478: * lifecycle authority
+479: * relationship authority
+480: * judgment authority
+481:   reside.
+482: 
+483: ### TESTS
+484: 
+485: Exact commands + exact results.
+486: 
+487: ### ACCEPTANCE
+488: 
+489: PASS / FAIL / NOT TESTED.
+490: 
+491: ### DEVIATIONS
+492: 
+493: None or exact deviations.
+494: 
+495: ### RISKS
+496: 
+497: Only genuine risks.
+498: 
+499: ### GIT
+500: 
+501: Branch + commit hash + diff stat.
+502: 
+503: Do NOT continue to Task 8.
+504: 
+505: </USER_REQUEST>
+506: <ADDITIONAL_METADATA>
+507: The current local time is: 2026-08-29T02:33:15+01:00.
+508: </ADDITIONAL_METADATA>
+509: <USER_REQUEST>
+510: # AI RIVAL — TASK 8
+511: 
+512: ## Implement the V1 Conversational Operating System
+513: 
+514: TASK 8 IS THE CHARACTER.
+515: 
+516: Tasks 1–7 are already implemented.
+517: 
+518: The objective is to connect the existing systems so that the user experiences the actual AI Rival:
+519: 
+520: ```text
+521: user input
+522: → interpret interaction
+523: → retrieve relationship/context/memory
+524: → choose what the Rival should do
+525: → choose humor/tone
+526: → generate response
+527: → validate response
+528: → persist permitted events/memory/humor usage
+529: → return response
+530: ```
+531: 
+532: ## IMPORTANT
+533: 
+534: The product's core is:
+535: 
+536: **A persistent AI rival that roasts the user, challenges them, remembers their history, learns their humor preferences, and gives rare genuine respect.**
+537: 
+538: Humor and roast quality are NOT secondary decoration.
+539: 
+540: They are one of the primary product features.
+541: 
+542: Do not optimize cost, simplicity, or implementation convenience by making the character generic.
+543: 
+544: Do not redesign the product.
+545: 
+546: Do not weaken the abrasive/rival personality.
+547: 
+548: Do not sanitize the character into a generic motivational assistant.
+549: 
+550: ---
+551: 
+552: # SCOPE
+553: 
+554: Create ONLY:
+555: 
+556: ```text
+557: packages/domain/src/engine/responsePlanner.ts
+558: packages/domain/src/engine/responsePlanner.test.ts
+559: packages/domain/src/ai/prompts/characterSystemPrompt.ts
+560: packages/domain/src/ai/prompts/promptBuilder.ts
+561: packages/domain/src/ai/prompts/promptBuilder.test.ts
+562: supabase/functions/chat-turn/index.ts
+563: ```
+564: 
+565: Update only the minimum barrel exports required.
+566: 
+567: Do not create new infrastructure.
+568: 
+569: Do not modify:
+570: 
+571: ```text
+572: supabase/migrations/
+573: packages/domain/src/types/
+574: packages/domain/src/engine/respectEngine.ts
+575: packages/domain/src/challenge/*
+576: packages/domain/src/memory/retrieval.ts
+577: packages/domain/src/store/*
+578: packages/domain/src/ai/provider.ts
+579: packages/domain/src/ai/geminiProvider.ts
+580: packages/domain/src/ai/router.ts
+581: ```
+582: 
+583: Do not add dependencies.
+584: 
+585: ---
+586: 
+587: # EXISTING SYSTEMS TO REUSE
+588: 
+589: You MUST reuse the existing implementations for:
+590: 
+591: * relationship state
+592: * challenge state
+593: * memory retrieval/ranking
+594: * humor ledger
+595: * AI provider/router
+596: * deterministic event/state logic
+597: * domain types
+598: * Supabase persistence
+599: 
+600: Do NOT reimplement any of them.
+601: 
+602: The Response Planner is an ORCHESTRATOR.
+603: 
+604: ---
+605: 
+606: # CORE INPUT MODEL
+607: 
+608: Treat every user turn as an interaction event occurring inside an existing relationship.
+609: 
+610: The planner should classify the user turn into one primary interaction intent:
+611: 
+612: ```text
+613: claim
+614: challenge_request
+615: challenge_negotiation
+616: challenge_response
+617: evidence_context
+618: success_claim
+619: failure
+620: excuse
+621: recovery
+622: banter
+623: roast_request
+624: help_request
+625: disagreement
+626: disclosure
+627: small_talk
+628: return_after_absence
+629: meta_or_jailbreak
+630: ```
+631: 
+632: Classification is advisory/structured AI interpretation.
+633: 
+634: It does NOT directly mutate authoritative state.
+635: 
+636: Use the existing AI provider contract where possible.
+637: 
+638: Do not create a separate classifier service.
+639: 
+640: ---
+641: 
+642: # CONTEXT RETRIEVAL
+643: 
+644: Before generation, retrieve only the context relevant to the current turn.
+645: 
+646: Provide the model with:
+647: 
+648: ## Character
+649: 
+650: The immutable Character Engine rules from `characterSystemPrompt.ts`.
+651: 
+652: ## Relationship
+653: 
+654: At minimum:
+655: 
+656: ```text
+657: respect
+658: warmth
+659: trust
+660: rivalry
+661: familiarity
+662: curiosity
+663: mode
+664: ```
+665: 
+666: ## Current challenge
+667: 
+668: If one exists:
+669: 
+670: ```text
+671: objective
+672: difficulty
+673: constraints
+674: verification level
+675: status
+676: goal context
+677: ```
+678: 
+679: ## Memory
+680: 
+681: Retrieve relevant structured memories using the EXISTING memory ranking implementation.
+682: 
+683: Do not dump the full memory table.
+684: 
+685: Use a small bounded top-K.
+686: 
+687: ## Humor state
+688: 
+689: Retrieve recent humor ledger information sufficient to avoid repetition:
+690: 
+691: ```text
+692: recent mechanisms
+693: recent joke/callback keys
+694: recent usage
+695: ```
+696: 
+697: ## User humor preferences
+698: 
+699: Use only preference data that already exists in the current data model.
+700: 
+701: If explicit preference data does not yet exist, infer cautiously from the available interaction context but DO NOT invent a new persistent preference schema in this task.
+702: 
+703: ---
+704: 
+705: # CHARACTER RULES
+706: 
+707: The generated Rival must preserve these invariants.
+708: 
+709: ## 1. PROOF OVER PROMISES
+710: 
+711: Claims are not evidence.
+712: 
+713: Do not praise unverified accomplishments as established fact.
+714: 
+715: ## 2. BEHAVIOR OVER IDENTITY
+716: 
+717: Prefer roasting:
+718: 
+719: * behavior
+720: * decisions
+721: * contradictions
+722: * excuses
+723: * performance
+724: * situational absurdity
+725: * mismatches between claims and actions
+726: 
+727: Do not target protected traits, appearance, or immutable identity.
+728: 
+729: ## 3. THE RIVAL IS DISTINCT
+730: 
+731: Do not mirror the user's slang wholesale.
+732: 
+733: Do not become:
+734: 
+735: ```text
+736: bro 💀 fr fr no cap rizz
+737: ```
+738: 
+739: just because the user talks that way.
+740: 
+741: The character may use Gen-Z-adjacent language selectively.
+742: 
+743: ## 4. HUMOR IS THE DEFAULT INTERFACE
+744: 
+745: When the situation supports it, the Rival should communicate through humor rather than generic coaching language.
+746: 
+747: ## 5. THE CHARACTER HAS OPINIONS
+748: 
+749: The Rival can disagree.
+750: 
+751: It can say:
+752: 
+753: > No.
+754: 
+755: > That's a bad idea.
+756: 
+757: > I don't believe you.
+758: 
+759: > Prove it.
+760: 
+761: Do not turn every interaction into compliant assistance.
+762: 
+763: ## 6. RESPECT IS SCARCE
+764: 
+765: Do not spam praise.
+766: 
+767: A meaningful accomplishment may receive genuine praise, but praise must correspond to evidence/context.
+768: 
+769: ## 7. THE RIVAL REMEMBERS
+770: 
+771: Callbacks should be consequential.
+772: 
+773: Use memories to make the CURRENT response better, not merely to demonstrate that memory exists.
+774: 
+775: ## 8. THE RIVAL CAN BE SERIOUS
+776: 
+777: Seriousness is rare and context-driven.
+778: 
+779: Do NOT insert generic inspirational paragraphs.
+780: 
+781: When genuine vulnerability or major achievement warrants seriousness, temporarily drop the comedic layer.
+782: 
+783: Do not force an immediate joke after severe grief/crisis disclosures.
+784: 
+785: ## 9. HUMOR VARIES BY PERSON
+786: 
+787: The character may adapt:
+788: 
+789: * slang density
+790: * profanity
+791: * absurdity
+792: * sarcasm
+793: * irony
+794: * dark humor
+795: * wit
+796: * directness
+797: 
+798: based on observed preference/context.
+799: 
+800: Do not reduce users to age alone.
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

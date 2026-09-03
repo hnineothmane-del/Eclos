@@ -6,6 +6,7 @@ import type { CharacterPlan } from './characterDirector.js';
 import type { SelectedMemory } from './rivalMemorySelector.js';
 import type { SelectedInsight } from './rivalInsightSelector.js';
 import type { ProcessInsight } from './processInsights.js';
+import type { RivalRelationshipContext } from './rivalRelationshipContext.js';
 
 export type InitiativeCategory =
   | 'RETURN_REMARK'
@@ -51,13 +52,16 @@ export interface AgencyInput {
   recentInitiatives: readonly DomainEvent[]; // events where we executed an initiative
   interactionHook?: RivalInteractionHook | null;
   nowIso: string;
+  relationshipContext?: RivalRelationshipContext;
 }
 
 export const AGENCY_PRIORITIES = {
   SERIOUS_INTERVENTION: 100,
   CHALLENGE_CRITICAL: 90,
   RETURN_WAKE: 80,
-  USER_INTERACTION: 70,
+  // A deliberate user interaction is more important than a passive
+  // return/wake opportunity; continuity can be rendered on the next turn.
+  USER_INTERACTION: 85,
   UNRESOLVED_FOLLOWUP: 60,
   HIGH_VALUE_CALLBACK: 50,
   MEANINGFUL_OBSERVATION: 40,
@@ -65,6 +69,17 @@ export const AGENCY_PRIORITIES = {
   RARE_EVENT: 20,
   QUIET: 0,
 } as const;
+
+const AMBIENT_LIFE_ACTIONS: readonly InitiativeCategory[] = [
+  'RARE_CHARACTER_EVENT',
+  'FICTIONAL_INTERRUPTION',
+  'SELF_AMUSEMENT',
+  'ABORTED_THOUGHT',
+  'IDLE_REMARK',
+  'MILD_IMPATIENCE',
+];
+const AMBIENT_LIFE_COOLDOWN_MS = 25 * 60 * 1000;
+const SAME_AMBIENT_CATEGORY_COOLDOWN_MS = 4 * 60 * 60 * 1000;
 
 function isRoast(userInput: string): boolean {
   const normalized = userInput.toLowerCase();
@@ -79,6 +94,27 @@ function getRecentInitiatives(input: AgencyInput, category: InitiativeCategory, 
     (e.payload as any)?.category === category &&
     (now - new Date(e.createdAt).getTime()) <= timeWindowMs
   ).length;
+}
+
+function hasRecentAmbientLife(input: AgencyInput, categories: readonly InitiativeCategory[], timeWindowMs: number): boolean {
+  const now = new Date(input.nowIso).getTime();
+  return input.recentInitiatives.some((event) =>
+    event.eventType === 'agency_initiative'
+    && categories.includes((event.payload as { category?: InitiativeCategory }).category as InitiativeCategory)
+    && now - new Date(event.createdAt).getTime() <= timeWindowMs,
+  );
+}
+
+function hasKnownLore(input: AgencyInput): boolean {
+  return input.allEvents.some((event) => event.eventType === 'rival_lore_revealed');
+}
+
+function selectRareLifeAction(input: AgencyInput): InitiativeCategory {
+  // The selection is intentionally driven by real state/history—not chance.
+  if (input.presence.activity === 'occupied' || hasKnownLore(input)) return 'FICTIONAL_INTERRUPTION';
+  if (input.presence.state === 'bored') return 'SELF_AMUSEMENT';
+  if (input.presence.state === 'resting' || input.presence.state === 'sleeping') return 'IDLE_REMARK';
+  return 'ABORTED_THOUGHT';
 }
 
 export function deriveAgencyDecision(input: AgencyInput): RivalInitiativeDecision {
@@ -103,8 +139,10 @@ export function deriveAgencyDecision(input: AgencyInput): RivalInitiativeDecisio
   }
 
   // CHALLENGE CRITICAL SUPPRESSION
-  if (isChallengeCritical && !input.userInput) {
-    // If the user hasn't said anything, wait for them. Don't interrupt while they are submitting evidence.
+  if (isChallengeCritical) {
+    // Critical challenge work owns the turn. A direct message can still be
+    // rendered by the normal challenge-response path, but initiative must not
+    // replace it with a roast, callback, or ambient interruption.
     return {
       action: 'QUIET',
       priority: AGENCY_PRIORITIES.CHALLENGE_CRITICAL,
@@ -219,7 +257,7 @@ export function deriveAgencyDecision(input: AgencyInput): RivalInitiativeDecisio
           cooldownKey: 'callback_insight',
         });
       }
-    } else if (input.selectedMemory && input.selectedMemory.score > 70 && input.selectedMemory.memory.type !== 'unresolved') {
+    } else if ((input.relationshipContext?.callbackDepth ?? 2) >= 2 && input.selectedMemory && input.selectedMemory.score > 70 && input.selectedMemory.memory.type !== 'unresolved') {
       if (getRecentInitiatives(input, 'CALLBACK_INTERRUPTION', 30 * 60 * 1000) === 0) {
         candidates.push({
           action: 'CALLBACK_INTERRUPTION',
@@ -252,13 +290,9 @@ export function deriveAgencyDecision(input: AgencyInput): RivalInitiativeDecisio
   }
 
   // 7. BOREDOM / IDLE
-  if (!input.userInput && input.presence.state === 'bored') {
-    if (getRecentInitiatives(input, 'IDLE_REMARK', 60 * 60 * 1000) === 0 && getRecentInitiatives(input, 'MILD_IMPATIENCE', 60 * 60 * 1000) === 0) {
-      // Rotate between a few bored categories
-      const randSeed = new Date(input.nowIso).getTime();
-      const options: InitiativeCategory[] = ['IDLE_REMARK', 'MILD_IMPATIENCE'];
-      const action = options[randSeed % options.length];
-      
+  if (!input.userInput && input.presence.state === 'bored' && input.presence.action !== 'rare_character_event') {
+    if (!hasRecentAmbientLife(input, AMBIENT_LIFE_ACTIONS, AMBIENT_LIFE_COOLDOWN_MS)) {
+      const action: InitiativeCategory = hasKnownLore(input) ? 'FICTIONAL_INTERRUPTION' : 'MILD_IMPATIENCE';
       candidates.push({
         action,
         priority: AGENCY_PRIORITIES.BOREDOM_IDLE,
@@ -275,16 +309,13 @@ export function deriveAgencyDecision(input: AgencyInput): RivalInitiativeDecisio
 
   // 8. RARE CHARACTER EVENT
   if (!input.userInput && input.presence.action === 'rare_character_event') {
-    if (getRecentInitiatives(input, 'RARE_CHARACTER_EVENT', 4 * 60 * 60 * 1000) === 0) {
-      // Pick one of the new rare character events
-      const randSeed = new Date(input.nowIso).getTime();
-      const options: InitiativeCategory[] = ['RARE_CHARACTER_EVENT', 'FICTIONAL_INTERRUPTION', 'SELF_AMUSEMENT', 'ABORTED_THOUGHT'];
-      const action = options[randSeed % options.length];
-
+    const action = selectRareLifeAction(input);
+    if (!hasRecentAmbientLife(input, AMBIENT_LIFE_ACTIONS, AMBIENT_LIFE_COOLDOWN_MS)
+      && !hasRecentAmbientLife(input, [action], SAME_AMBIENT_CATEGORY_COOLDOWN_MS)) {
       candidates.push({
         action,
         priority: AGENCY_PRIORITIES.RARE_EVENT,
-        reason: 'A low-frequency character quirk or lore event.',
+        reason: 'A low-frequency character-life opportunity is contextually warranted.',
         sourceEventIds: input.presence.sourceEventIds,
         sourceMemoryKeys: [],
         sourceInsightKeys: [],

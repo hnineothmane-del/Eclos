@@ -68,10 +68,16 @@ describe('Vertical Slice Integration', () => {
            if (idx >= 0) db.challenges[idx].status = args.p_new_status;
            return { data: {}, error: null };
         }
+        if (rpcName === 'issue_challenge') {
+           const row = { id: `id-${Date.now()}`, user_id: args.p_user_id, status: 'issued', title: args.p_title, description: args.p_description, difficulty: args.p_difficulty, parameters: args.p_parameters, created_at: new Date().toISOString() };
+           db.challenges.push(row);
+           return { data: row, error: null };
+        }
         if (rpcName === 'record_evidence_submission') {
-           const row = { id: 'ev1', challenge_id: args.p_challenge_id, user_id: args.p_user_id, round: 1, kind: args.p_kind, content: args.p_content, metadata: args.p_metadata, created_at: new Date().toISOString() };
-           db.evidence.push(row);
-           return { data: { submission_id: 'ev1', evidence_round: 1 }, error: null };
+           const dbRow = { id: 'ev1', challenge_id: args.p_challenge_id, user_id: args.p_user_id, round: 1, kind: args.p_kind, content: args.p_content, metadata: args.p_metadata, created_at: new Date().toISOString() };
+           const apiRow = { id: 'ev1', challengeId: args.p_challenge_id, userId: args.p_user_id, round: 1, kind: args.p_kind, content: args.p_content, metadata: args.p_metadata, submittedAt: new Date().toISOString() };
+           db.evidence.push(dbRow);
+           return { data: apiRow, error: null };
         }
         if (rpcName === 'judge_challenge') {
            db.relationship.respect += args.p_respect_delta;

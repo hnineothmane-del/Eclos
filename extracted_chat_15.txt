@@ -1,0 +1,44 @@
+Created At: 2026-08-31T23:12:39+01:00
+Completed At: 2026-08-31T23:12:39+01:00
+
+The command exited with code 0.
+Output:
+On branch main
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   apps/web/src/HomePage.test.tsx
+	modified:   apps/web/src/components/RivalLens.tsx
+	modified:   apps/web/src/lib/api.ts
+	modified:   apps/web/src/pages/HomePage.tsx
+	modified:   apps/web/src/styles/home.css
+	modified:   packages/domain/src/ai/prompts/promptBuilder.ts
+	modified:   packages/domain/src/challenge/challengeEngine.ts
+	modified:   packages/domain/src/challenge/index.ts
+	modified:   packages/domain/src/engine/index.ts
+	modified:   packages/domain/src/engine/responsePlanner.test.ts
+	modified:   packages/domain/src/engine/responsePlanner.ts
+	modified:   supabase/functions/chat-turn/index.ts
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	apps/web/src/components/RivalLens.test.tsx
+	apps/web/src/components/RivalPresence.test.tsx
+	apps/web/src/components/RivalPresence.tsx
+	apps/web/src/components/useRivalPresence.ts
+	packages/domain/src/challenge/challengeSelector.test.ts
+	packages/domain/src/challenge/challengeSelector.ts
+	packages/domain/src/engine/characterDirector.test.ts
+	packages/domain/src/engine/characterDirector.ts
+	packages/domain/src/engine/presenceEngine.test.ts
+	packages/domain/src/engine/presenceEngine.ts
+	packages/domain/src/engine/rivalExperience.test.ts
+	packages/domain/src/engine/rivalMemory.test.ts
+	packages/domain/src/engine/rivalMemory.ts
+	packages/domain/src/engine/rivalMemorySelector.test.ts
+	packages/domain/src/engine/rivalMemorySelector.ts
+	scratch_task8.txt
+	task8_full.txt
+
+no changes added to commit (use "git add" and/or "git commit -a")
+

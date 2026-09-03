@@ -1,0 +1,28 @@
+Created At: 2026-08-30T02:07:06+01:00
+Completed At: 2026-08-30T02:07:07+01:00
+
+The command exited with code 0.
+Output:
+warning: in the working copy of 'apps/web/src/lib/api.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/web/src/pages/HomePage.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/web/src/styles/home.css', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/domain/src/ai/prompts/promptBuilder.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/domain/src/challenge/index.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/domain/src/engine/responsePlanner.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/domain/src/engine/responsePlanner.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'supabase/functions/chat-turn/index.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/web/src/components/RivalLens.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/web/src/lib/captureProfile.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/web/src/types/rivalLens.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/domain/src/challenge/captureProfile.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/domain/src/challenge/captureProfile.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'supabase/migrations/0007_process_observation.sql', LF will be replaced by CRLF the next time Git touches it
+[main e0354fe] feat: Rival Lens dynamic process capture
+ 14 files changed, 571 insertions(+), 6 deletions(-)
+ create mode 100644 apps/web/src/components/RivalLens.tsx
+ create mode 100644 apps/web/src/lib/captureProfile.ts
+ create mode 100644 apps/web/src/types/rivalLens.ts
+ create mode 100644 packages/domain/src/challenge/captureProfile.test.ts
+ create mode 100644 packages/domain/src/challenge/captureProfile.ts
+ create mode 100644 supabase/migrations/0007_process_observation.sql
+

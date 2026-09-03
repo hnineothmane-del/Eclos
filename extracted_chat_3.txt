@@ -1,0 +1,22 @@
+Created At: 2026-08-29T15:45:54+01:00
+Completed At: 2026-08-29T15:45:55+01:00
+
+The command exited with code 0.
+Output:
+warning: in the working copy of 'packages/domain/src/ai/index.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/domain/src/engine/index.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/domain/src/ai/prompts/characterSystemPrompt.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/domain/src/ai/prompts/promptBuilder.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/domain/src/ai/prompts/promptBuilder.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/domain/src/engine/responsePlanner.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/domain/src/engine/responsePlanner.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'supabase/functions/chat-turn/index.ts', LF will be replaced by CRLF the next time Git touches it
+[main 7b030b2] feat: implement response planner and character prompts
+ 8 files changed, 580 insertions(+)
+ create mode 100644 packages/domain/src/ai/prompts/characterSystemPrompt.ts
+ create mode 100644 packages/domain/src/ai/prompts/promptBuilder.test.ts
+ create mode 100644 packages/domain/src/ai/prompts/promptBuilder.ts
+ create mode 100644 packages/domain/src/engine/responsePlanner.test.ts
+ create mode 100644 packages/domain/src/engine/responsePlanner.ts
+ create mode 100644 supabase/functions/chat-turn/index.ts
+

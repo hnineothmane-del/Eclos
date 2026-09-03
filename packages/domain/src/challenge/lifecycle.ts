@@ -5,13 +5,13 @@ import type { ChallengeStatus } from '../types/index.js';
 // ---------------------------------------------------------------------------
 
 export const CHALLENGE_TRANSITIONS: Readonly<Record<ChallengeStatus, readonly ChallengeStatus[]>> = {
-  issued: ['negotiated', 'accepted'],
-  negotiated: ['negotiated', 'accepted'],
-  accepted: ['started'],
-  started: ['attempted'],
-  attempted: ['evidence_submitted'],
-  evidence_submitted: ['needs_more_evidence', 'judged'],
-  needs_more_evidence: ['evidence_submitted'],
+  issued: ['negotiated', 'accepted', 'closed'],
+  negotiated: ['negotiated', 'accepted', 'closed'],
+  accepted: ['started', 'closed'],
+  started: ['attempted', 'evidence_submitted', 'closed'],
+  attempted: ['evidence_submitted', 'closed'],
+  evidence_submitted: ['needs_more_evidence', 'judged', 'closed'],
+  needs_more_evidence: ['evidence_submitted', 'closed'],
   judged: ['closed'],
   closed: [],
 } as const;

@@ -1,0 +1,158 @@
+Created At: 2026-09-02T03:36:50+01:00
+Completed At: 2026-09-02T03:36:50+01:00
+File Path: `file:///c:/Users/a/Desktop/Roast%20app/supabase/functions/chat-turn/index.ts`
+Total Lines: 155
+Total Bytes: 8478
+Showing lines 1 to 150
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+2: import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+3: import { 
+4:   ResponsePlanner, 
+5:   DefaultModelRouter, 
+6:   SupabaseRelationshipStateStore, 
+7:   SupabaseMemoryStore, 
+8:   SupabaseHumorStateStore, 
+9:   SupabaseEventStore,
+10:   type PresenceDecision,
+11: } from '@ai-rival/domain';
+12: 
+13: const corsHeaders = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
+14: const activeStatuses = ['issued', 'negotiated', 'accepted', 'started', 'attempted', 'evidence_submitted', 'needs_more_evidence'];
+15: const ambientEventTypes = new Set(['ambient_observation', 'ambient_comment', 'unexpected_wake', 'sleep_start', 'sleep_end', 'return_greeting', 'idle_reaction', 'session_reentry', 'rare_character_event']);
+16: const interactionHooks = new Set(['tap', 'poke', 'wake', 'user_roast']);
+17: 
+18: function json(body: Record<string, unknown>, status = 200) {
+19:   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+20: }
+21: 
+22: function mapChallenge(row: Record<string, any>) {
+23:   const parameters = row.parameters || {};
+24:   return {
+25:     id: row.id, userId: row.user_id, goalId: row.goal_id, domain: parameters.domain || row.description,
+26:     objective: row.title, difficulty: parameters.difficulty_number || 5, constraints: parameters.constraints || [],
+27:     expectedDurationMinutes: parameters.expected_duration_minutes ?? null, verificationLevel: parameters.verification_level || 'self_report',
+28:     hypothesis: parameters.hypothesis || null, status: row.status, evidenceRound: parameters.evidence_round || 0,
+29:     createdAt: row.created_at, updatedAt: row.updated_at,
+30:   };
+31: }
+32: 
+33: function isPresenceDecision(value: unknown): value is { state: string; activity: string; attention: string; action: string | null; reason: string; sourceEventIds: string[]; generatedAt: string } {
+34:   if (!value || typeof value !== 'object') return false;
+35:   const decision = value as Record<string, unknown>;
+36:   return typeof decision.state === 'string'
+37:     && typeof decision.activity === 'string'
+38:     && typeof decision.attention === 'string'
+39:     && (decision.action === null || (typeof decision.action === 'string' && ambientEventTypes.has(decision.action)))
+40:     && typeof decision.reason === 'string'
+41:     && typeof decision.generatedAt === 'string'
+42:     && Array.isArray(decision.sourceEventIds)
+43:     && decision.sourceEventIds.every((id) => typeof id === 'string');
+44: }
+45: 
+46: serve(async (req) => {
+47:   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+48:   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+49:   try {
+50:     const supabaseUrl = Deno.env.get('SUPABASE_URL');
+51:     const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
+52:     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+53:     const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
+54:     const cheapModel = Deno.env.get('GEMINI_MODEL_CHEAP') || 'gemini-2.5-flash';
+55:     const strongModel = Deno.env.get('GEMINI_MODEL_STRONG') || 'gemini-2.5-pro';
+56:     const multimodalModel = Deno.env.get('GEMINI_MODEL_MULTIMODAL') || 'gemini-2.5-pro-vision';
+57:     const authHeader = req.headers.get('Authorization');
+58:     if (!supabaseUrl || !anonKey || !serviceRoleKey || !geminiApiKey || !authHeader) return json({ error: 'Unauthorized' }, 401);
+59: 
+60:     const authClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
+61:     const { data: { user }, error: authError } = await authClient.auth.getUser();
+62:     if (authError || !user) return json({ error: 'Unauthorized' }, 401);
+63:     const body = await req.json();
+64:     const presenceDecision = isPresenceDecision(body.presenceDecision) ? body.presenceDecision : null;
+65:     const ambientDecision = presenceDecision?.action ? presenceDecision : null;
+66:     const interactionHook = typeof body.interactionHook === 'string' && interactionHooks.has(body.interactionHook) ? body.interactionHook : null;
+67:     const userInput = typeof body.userInput === 'string' ? body.userInput.trim() : '';
+68:     if (!userInput && !ambientDecision && !interactionHook) return json({ error: 'userInput, a valid ambient event, or interaction is required' }, 400);
+69: 
+70:     const trustedClient = createClient(supabaseUrl, serviceRoleKey);
+71:     
+72:     // Ensure user state is initialized
+73:     await trustedClient.rpc('initialize_user_state', { p_user_id: user.id });
+74: 
+75:     // The service-role client stays inside this Edge Function and performs trusted writes.
+76:     const { data: usage, error: usageError } = await trustedClient.rpc('increment_usage_and_check', { p_user_id: user.id, p_interaction_delta: 1 });
+77:     if (usageError) throw usageError;
+78:     if (!usage?.allowed) {
+79:       return json({
+80:         error: usage?.reason === 'rate_limited' ? 'Please slow down and try again shortly.' : 'You have used today\'s allowance.',
+81:         code: usage?.reason === 'rate_limited' ? 'RATE_LIMITED' : 'USAGE_LIMIT_REACHED',
+82:         entitlement: {
+83:           tier: usage?.tier === 'paid' ? 'paid' : 'free',
+84:           active: Boolean(usage?.active),
+85:           dailyLimit: Number(usage?.daily_limit || 0),
+86:           currentInteractions: Number(usage?.current_interactions || 0),
+87:         },
+88:       }, 429);
+89:     }
+90: 
+91:     const { data: challengeRows, error: challengeError } = await trustedClient
+92:       .from('challenges').select('*').eq('user_id', user.id).in('status', activeStatuses).order('updated_at', { ascending: false }).limit(1);
+93:     if (challengeError) throw challengeError;
+94:     const activeChallenge = challengeRows?.[0] ? mapChallenge(challengeRows[0]) : null;
+95:     const modelRouter = new DefaultModelRouter({ apiKey: geminiApiKey, cheapModel, strongModel, multimodalModel });
+96:     const dbClient = trustedClient as any;
+97:     const planner = new ResponsePlanner({
+98:       modelRouter,
+99:       relationshipStore: new SupabaseRelationshipStateStore(dbClient),
+100:       memoryStore: new SupabaseMemoryStore(dbClient),
+101:       humorStore: new SupabaseHumorStateStore(dbClient),
+102:       eventStore: new SupabaseEventStore(dbClient),
+103:     });
+104:     
+105:     const aiResponse = ambientDecision
+106:       ? await planner.planAmbientTurn({ userId: user.id, presenceDecision: ambientDecision as PresenceDecision, activeChallenge })
+107:       : await planner.planTurn({ userId: user.id, userInput, activeChallenge, presenceDecision: presenceDecision as PresenceDecision | null, interactionHook: interactionHook as any, nowIso: new Date().toISOString() });
+108: 
+109:     // A silent presence result is not a model call and has no UI message.
+110:     if (!aiResponse) return json({ ambient: true, response: null });
+111: 
+112:     // The selector is deterministic server-side context; AI event suggestions
+113:     // never create challenges.
+114:     if (!ambientDecision && aiResponse.challengeSelection && !activeChallenge) {
+115:       try {
+116:         const { ChallengeEngine } = await import('@ai-rival/domain');
+117:         const selection = aiResponse.challengeSelection;
+118:         const challengeEngine = new ChallengeEngine({ client: dbClient, authenticatedUserId: user.id, router: modelRouter });
+119:         await challengeEngine.issue(user.id, {
+120:           userId: user.id,
+121:           domain: selection.domain,
+122:           objective: selection.objective,
+123:           difficulty: selection.difficulty,
+124:           constraints: selection.constraints,
+125:           expectedDurationMinutes: selection.expectedDurationMinutes,
+126:           verificationLevel: selection.verificationLevel,
+127:           hypothesis: `Selected primitive: ${selection.primitive}`,
+128:           primitive: selection.primitive,
+129:         });
+130:       } catch (e) {
+131:         console.error('Failed to issue deterministic challenge:', e);
+132:       }
+133:     }
+134: 
+135:     return json({
+136:       response: aiResponse.response,
+137:       intent: aiResponse.intent,
+138:       mode: aiResponse.register,
+139:       humorMechanism: aiResponse.humorMechanism,
+140:       seriousFlag: aiResponse.seriousFlag,
+141:       ambient: !!ambientDecision,
+142:       easterEgg: aiResponse.easterEgg?.authorized ? { id: aiResponse.easterEgg.id, visualCue: aiResponse.easterEgg.visualCue } : null,
+143:       entitlement: {
+144:         tier: usage?.tier === 'paid' ? 'paid' : 'free',
+145:         active: Boolean(usage?.active),
+146:         dailyLimit: Number(usage?.daily_limit || 0),
+147:         currentInteractions: Number(usage?.current_interactions || 0),
+148:       },
+149:     });
+150:   } catch (error) {
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

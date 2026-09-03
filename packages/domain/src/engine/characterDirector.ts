@@ -3,6 +3,7 @@ import type { RelationshipState } from '../types/relationship.js';
 import type { RankedMemoryItem } from '../memory/retrieval.js';
 import type { ProcessInsight } from './processInsights.js';
 import type { PresenceDecision } from './presenceEngine.js';
+import { deriveRivalRelationshipContext, type RivalRelationshipContext } from './rivalRelationshipContext.js';
 
 export type RivalMood = 'playful' | 'smug' | 'irritated' | 'curious' | 'serious' | 'amused';
 export type InteractionMode =
@@ -76,6 +77,7 @@ export interface CharacterDirectorInput {
   recentHumor: readonly string[];
   /** Produced server-side by the deterministic presence engine, never model output. */
   presenceDecision?: PresenceDecision | null;
+  relationshipContext?: RivalRelationshipContext;
 }
 
 const clamp = (value: number) => Math.max(0, Math.min(10, value));
@@ -115,17 +117,17 @@ export function deriveCharacterState(input: CharacterDirectorInput): RivalCharac
   };
 }
 
-function chooseHumor(input: CharacterDirectorInput, state: RivalCharacterState, sincerity: boolean): HumorOpportunity | null {
+function chooseHumor(input: CharacterDirectorInput, state: RivalCharacterState, sincerity: boolean, relationshipContext: RivalRelationshipContext): HumorOpportunity | null {
   if (state.seriousness >= 7 || sincerity || input.relationship.trust < 20) return null;
   const recent = new Set(input.recentHumor);
-  const intensity = clamp(Math.min(state.intensity, input.relationship.familiarity >= 45 ? 8 : 4));
+  const intensity = clamp(Math.min(state.intensity, relationshipContext.teasingWarmth >= 5 ? 8 : 4));
   const process = firstInsight(input.processInsights, ['initialization_delay', 'stall_then_recovery', 'strategy_switch', 'repeated_strategy_switch']);
   const message = input.userInput.toLowerCase();
 
   if (process && !recent.has('observational')) {
     return { mechanism: 'observational', target: 'process_insight', intensity, reason: 'grounded process observation is relevant', sourceEventIds: [...process.sourceEventIds] };
   }
-  if (input.relationship.familiarity >= 45 && input.memories[0] && !recent.has('callback')) {
+  if (relationshipContext.callbackDepth >= 2 && input.memories[0] && !recent.has('callback')) {
     return { mechanism: 'callback', target: 'historical_callback', intensity, reason: 'relevant stored callback is available', sourceEventIds: [] };
   }
   if (hasAny(message, metaTerms) && input.relationship.familiarity >= 35 && !recent.has('self_aware')) {
@@ -142,9 +144,13 @@ function chooseHumor(input: CharacterDirectorInput, state: RivalCharacterState, 
 
 export function deriveCharacterPlan(input: CharacterDirectorInput): CharacterPlan {
   const state = deriveCharacterState(input);
+  const relationshipContext = input.relationshipContext ?? deriveRivalRelationshipContext(input.relationship);
   const message = input.userInput.trim().toLowerCase();
-  const sincerity = state.seriousness >= 7 && hasInsight(input.processInsights, ['persistence_after_failure', 'rapid_recovery', 'successful_under_time_pressure']);
-  const humor = chooseHumor(input, state, sincerity);
+  const sincerity = state.seriousness >= 7
+    && relationshipContext.phase !== 'introductory'
+    && relationshipContext.sincerityPermission >= 4
+    && hasInsight(input.processInsights, ['persistence_after_failure', 'rapid_recovery', 'successful_under_time_pressure']);
+  const humor = chooseHumor(input, state, sincerity, relationshipContext);
 
   let interactionMode: InteractionMode;
   if (state.seriousness >= 7) interactionMode = sincerity ? 'sincere_recognition' : 'serious_intervention';

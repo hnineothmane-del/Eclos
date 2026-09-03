@@ -6,3 +6,4 @@ export * from './ai/index.js';
 export * from './billing/index.js';
 export * from './store/index.js';
 export * from './util/clamp.js';
+export * from './lore/rivalCanon.js';

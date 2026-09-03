@@ -99,4 +99,64 @@ describe('ResponsePlanner', () => {
     expect(promptCall).not.toContain('fabricated history');
     expect(promptCall).not.toContain('[SIGNAL] USER-PROVIDED, UNVERIFIED: GOT IT');
   });
+
+  it('persists one authorized hidden discovery and gives the renderer its bounded direction', async () => {
+    const { planner, deps, generate } = setup({ response: 'Nothing. You saw nothing.', intent: 'x' });
+    const interactions = [
+      { id: 'i1', eventType: 'rival_interaction', source: 'user_action', payload: { interactionType: 'tap' }, createdAt: '2026-01-01T11:30:00.000Z' },
+      { id: 'i2', eventType: 'rival_interaction', source: 'user_action', payload: { interactionType: 'tap' }, createdAt: '2026-01-01T11:45:00.000Z' },
+      { id: 'i3', eventType: 'rival_interaction', source: 'user_action', payload: { interactionType: 'tap' }, createdAt: '2026-01-01T11:55:00.000Z' },
+    ];
+    deps.eventStore = { recentForUser: vi.fn().mockResolvedValue(interactions), append: vi.fn().mockResolvedValue({}) } as any;
+    const result = await planner.planTurn({ userId: 'u1', userInput: '', interactionHook: 'tap', nowIso: '2026-01-01T12:00:00.000Z', presenceDecision: { state: 'idle', activity: 'idle', attention: 'observe', action: null, reason: 'no_worthy_event', sourceEventIds: [], generatedAt: '2026-01-01T12:00:00.000Z' } });
+    expect(result!.easterEgg).toMatchObject({ id: 'caught_occupied', authorized: true });
+    expect(deps.eventStore.append).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'rival_easter_egg_discovered', payload: expect.objectContaining({ id: 'caught_occupied' }) }));
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate.mock.calls[0][0].prompt).toContain('HIDDEN CHARACTER EVENT');
+  });
+
+  it('persists a newly authorized lore hint and gives the renderer only bounded fictional context', async () => {
+    const { planner, deps, generate } = setup({ response: 'Classified.', intent: 'x' });
+    deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+    const result = await planner.planTurn({ userId: 'u1', userInput: 'Where are you from?', nowIso: '2026-01-01T12:00:00.000Z' });
+
+    expect(result!.lore).toMatchObject({ fact: { id: 'roasteria_reference' }, revealLevel: 'hint', newlyRevealed: true });
+    expect(deps.eventStore.append).toHaveBeenCalledWith(expect.objectContaining({
+      eventType: 'rival_lore_revealed',
+      payload: expect.objectContaining({ loreId: 'roasteria_reference', revealLevel: 'hint' }),
+    }));
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate.mock.calls[0][0].prompt).toContain('RIVAL MICRO-LORE');
+    expect(generate.mock.calls[0][0].prompt).toContain('Do not invent additional persistent lore');
+  });
+
+  it('records a spoken ambient initiative with its deterministic provenance', async () => {
+    const { planner, deps, generate } = setup({ response: 'Nothing to see here.', intent: 'ambient' });
+    deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+    await planner.planAmbientTurn({
+      userId: 'u1',
+      presenceDecision: { state: 'bored', activity: 'waiting', attention: 'observe', action: 'rare_character_event', reason: 'long_idle', sourceEventIds: ['idle-1'], generatedAt: '2026-01-01T12:00:00.000Z' },
+    });
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(deps.eventStore.append).toHaveBeenCalledWith(expect.objectContaining({
+      eventType: 'agency_initiative',
+      payload: expect.objectContaining({ category: 'SELF_AMUSEMENT', sourceEventIds: ['idle-1'], presenceEvent: 'rare_character_event' }),
+    }));
+  });
+
+  it('retrieves at most one verified live item only for an explicit current-world request', async () => {
+    const { planner, deps, generate } = setup({ response: 'Here is the verified context.', intent: 'current' });
+    const context = { id: 'ctx-1', source: 'trusted-feed', retrievedAt: '2026-01-01T12:00:00.000Z', category: 'news', title: 'Mars update', summary: 'A current Mars update.', relevance: 'high', confidence: 0.9, expiresAt: '2026-01-01T18:00:00.000Z', sourceUrl: null };
+    deps.externalContextProvider = { getRelevantContext: vi.fn().mockResolvedValue([context]) };
+    const result = await planner.planTurn({ userId: 'u1', userInput: 'Why is everyone talking about Mars?', nowIso: '2026-01-01T12:00:00.000Z' });
+    expect(deps.externalContextProvider.getRelevantContext).toHaveBeenCalledWith(expect.objectContaining({ query: 'Why is everyone talking about Mars?', reason: 'explicit_current_query' }));
+    expect(result!.liveContext).toEqual(context);
+    expect(generate).toHaveBeenCalledTimes(1);
+
+    const ordinary = setup({ response: 'Work mode.', intent: 'x' });
+    ordinary.deps.externalContextProvider = { getRelevantContext: vi.fn() };
+    await ordinary.planner.planTurn({ userId: 'u1', userInput: 'I am stuck on this function', nowIso: '2026-01-01T12:00:00.000Z' });
+    expect(ordinary.deps.externalContextProvider.getRelevantContext).not.toHaveBeenCalled();
+  });
 });
