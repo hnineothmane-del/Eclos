@@ -363,16 +363,6 @@ export class ChallengeEngine {
       challenge_primitive: params.primitive ?? null,
     };
 
-    const insertPayload: Record<string, unknown> = {
-      user_id: userId,
-      goal_id: goalId,
-      title: params.objective,
-      description: params.domain,
-      difficulty: difficultyBand,
-      status: 'issued',
-      parameters: parametersPayload,
-    };
-
     const { data, error } = await this.client.rpc<ChallengeRow>('issue_challenge', {
       p_user_id: userId,
       p_goal_id: goalId,

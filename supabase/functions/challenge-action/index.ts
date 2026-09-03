@@ -64,10 +64,11 @@ serve(async (req) => {
 
     return json({ data: result });
   } catch (error: any) {
-    console.error('Challenge action error:', error);
+    const correlationId = crypto.randomUUID();
+    console.error(`[${correlationId}] Challenge action error:`, error);
     return json({ 
-      error: error.message || 'Internal server error',
-      details: error.stack
+      error: 'Internal server error processing challenge action',
+      correlationId
     }, 500);
   }
 });

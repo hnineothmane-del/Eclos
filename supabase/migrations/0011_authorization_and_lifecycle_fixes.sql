@@ -286,67 +286,7 @@ BEGIN
 END;
 $$;
 
--- 5. increment_usage_and_check
-CREATE OR REPLACE FUNCTION public.increment_usage_and_check(
-    p_user_id UUID,
-    p_interaction_delta INT DEFAULT 0,
-    p_ai_generation_delta INT DEFAULT 0,
-    p_audio_generation_delta INT DEFAULT 0,
-    p_image_generation_delta INT DEFAULT 0
-)
-RETURNS JSONB
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-    v_sub public.subscriptions;
-    v_usage public.usage_counters;
-    v_is_paid BOOLEAN;
-    v_daily_limit INT;
-    v_allowed BOOLEAN := true;
-    v_reason TEXT := NULL;
-    v_new_interactions INT;
-    v_new_ai INT;
-    v_new_audio INT;
-    v_new_image INT;
-BEGIN
-    IF current_setting('role', true) <> 'service_role' THEN
-        IF auth.uid() IS NULL OR auth.uid() <> p_user_id THEN
-            RAISE EXCEPTION 'Unauthorized: Effective user does not match p_user_id';
-        END IF;
-    END IF;
 
-    SELECT * INTO v_sub FROM public.subscriptions WHERE user_id = p_user_id;
-    v_is_paid := (v_sub.id IS NOT NULL AND v_sub.status = 'active');
-    v_daily_limit := CASE WHEN v_is_paid THEN 500 ELSE 20 END;
-
-    INSERT INTO public.usage_counters (user_id, current_interactions, current_ai_generations, current_audio_generations, current_image_generations)
-    VALUES (p_user_id, p_interaction_delta, p_ai_generation_delta, p_audio_generation_delta, p_image_generation_delta)
-    ON CONFLICT (user_id) DO UPDATE SET
-        current_interactions = public.usage_counters.current_interactions + p_interaction_delta,
-        current_ai_generations = public.usage_counters.current_ai_generations + p_ai_generation_delta,
-        current_audio_generations = public.usage_counters.current_audio_generations + p_audio_generation_delta,
-        current_image_generations = public.usage_counters.current_image_generations + p_image_generation_delta,
-        updated_at = now()
-    RETURNING * INTO v_usage;
-
-    IF v_usage.current_interactions > v_daily_limit THEN
-        v_allowed := false;
-        v_reason := 'limit_exceeded';
-    END IF;
-
-    RETURN jsonb_build_object(
-        'allowed', v_allowed,
-        'reason', v_reason,
-        'tier', CASE WHEN v_is_paid THEN 'paid' ELSE 'free' END,
-        'active', v_sub.status = 'active',
-        'daily_limit', v_daily_limit,
-        'current_interactions', v_usage.current_interactions,
-        'current_ai_generations', v_usage.current_ai_generations
-    );
-END;
-$$;
 
 -- Add uniqueness constraint to judgments
 ALTER TABLE public.judgments DROP CONSTRAINT IF EXISTS judgments_evidence_submission_id_key;
@@ -357,7 +297,6 @@ GRANT EXECUTE ON FUNCTION public.transition_challenge_status TO authenticated, s
 GRANT EXECUTE ON FUNCTION public.record_evidence_submission TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.transition_challenge_negotiation TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.judge_challenge TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.increment_usage_and_check TO authenticated, service_role;
 
 -- 6. issue_challenge
 CREATE OR REPLACE FUNCTION public.issue_challenge(

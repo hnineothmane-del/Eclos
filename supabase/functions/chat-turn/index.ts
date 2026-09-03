@@ -57,9 +57,12 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization');
     if (!supabaseUrl || !anonKey || !serviceRoleKey || !geminiApiKey || !authHeader) return json({ error: 'Unauthorized' }, 401);
 
+    const tAuthStart = performance.now();
     const authClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
     const { data: { user }, error: authError } = await authClient.auth.getUser();
     if (authError || !user) return json({ error: 'Unauthorized' }, 401);
+    const tAuthEnd = performance.now();
+
     const body = await req.json();
     const presenceDecision = isPresenceDecision(body.presenceDecision) ? body.presenceDecision : null;
     const ambientDecision = presenceDecision?.action ? presenceDecision : null;
@@ -73,7 +76,10 @@ serve(async (req) => {
     await trustedClient.rpc('initialize_user_state', { p_user_id: user.id });
 
     // The service-role client stays inside this Edge Function and performs trusted writes.
+    const tUsageStart = performance.now();
     const { data: usage, error: usageError } = await trustedClient.rpc('increment_usage_and_check', { p_user_id: user.id, p_interaction_delta: 1 });
+    const tUsageEnd = performance.now();
+    
     if (usageError) throw usageError;
     if (!usage?.allowed) {
       return json({
@@ -88,8 +94,10 @@ serve(async (req) => {
       }, 429);
     }
 
+    const tChallengeStart = performance.now();
     const { data: challengeRows, error: challengeError } = await trustedClient
       .from('challenges').select('*').eq('user_id', user.id).in('status', activeStatuses).order('updated_at', { ascending: false }).limit(1);
+    const tChallengeEnd = performance.now();
     if (challengeError) throw challengeError;
     const activeChallenge = challengeRows?.[0] ? mapChallenge(challengeRows[0]) : null;
     const modelRouter = new DefaultModelRouter({ apiKey: geminiApiKey, cheapModel, strongModel, multimodalModel });
@@ -102,9 +110,13 @@ serve(async (req) => {
       eventStore: new SupabaseEventStore(dbClient),
     });
     
+    const tPlanStart = performance.now();
     const aiResponse = ambientDecision
       ? await planner.planAmbientTurn({ userId: user.id, presenceDecision: ambientDecision as PresenceDecision, activeChallenge })
       : await planner.planTurn({ userId: user.id, userInput, activeChallenge, presenceDecision: presenceDecision as PresenceDecision | null, interactionHook: interactionHook as any, nowIso: new Date().toISOString() });
+    const tPlanEnd = performance.now();
+
+    console.log(`[TIMING] Auth: ${Math.round(tAuthEnd - tAuthStart)}ms, Usage: ${Math.round(tUsageEnd - tUsageStart)}ms, ChallengeLookup: ${Math.round(tChallengeEnd - tChallengeStart)}ms, AI PlanTurn: ${Math.round(tPlanEnd - tPlanStart)}ms, Total (so far): ${Math.round(tPlanEnd - tAuthStart)}ms`);
 
     // A silent presence result is not a model call and has no UI message.
     if (!aiResponse) return json({ ambient: true, response: null });
@@ -117,7 +129,7 @@ serve(async (req) => {
         const { ChallengeEngine } = await import('@ai-rival/domain');
         const selection = aiResponse.challengeSelection;
         const challengeEngine = new ChallengeEngine({ client: dbClient, authenticatedUserId: user.id, router: modelRouter });
-        issuedChallenge = await challengeEngine.issue({
+        issuedChallenge = await challengeEngine.issue(user.id, {
           userId: user.id,
           domain: selection.domain,
           objective: selection.objective,
@@ -150,11 +162,11 @@ serve(async (req) => {
       },
     });
   } catch (error) {
-    console.error('chat-turn failed:', error);
+    const correlationId = crypto.randomUUID();
+    console.error(`[${correlationId}] chat-turn failed:`, error);
     return json({ 
       error: 'Unable to complete chat turn',
-      details: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined
+      correlationId
     }, 500);
   }
 });

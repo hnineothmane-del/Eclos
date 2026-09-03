@@ -7,6 +7,7 @@ export type EventType =
   | 'challenge_started'
   | 'challenge_attempted'
   | 'evidence_submitted'
+  | 'needs_more_evidence'
   | 'challenge_judged'
   | 'challenge_closed'
   | 'relationship_delta_applied'

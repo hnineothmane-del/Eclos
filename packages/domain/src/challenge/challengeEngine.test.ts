@@ -267,6 +267,32 @@ describe('ChallengeEngine', () => {
         }),
       ).rejects.toThrow();
     });
+
+    // Regression: chat-turn was calling challengeEngine.issue({...}) without the userId
+    // first argument, causing assertAuthenticatedIdentity to compare against [object Object].
+    it('issue() accepts the correct userId as first positional argument', async () => {
+      const challenge = await engine.issue('user-1', {
+        userId: 'user-1',
+        domain: 'coding',
+        objective: 'Write a function',
+        difficulty: 5,
+      });
+      expect(challenge.userId).toBe('user-1');
+      expect(challenge.status).toBe('issued');
+    });
+
+    // Regression: assertAuthenticatedIdentity must reject a different user
+    it('issue() rejects when authenticatedUserId does not match userId arg', async () => {
+      // engine is initialized with authenticatedUserId: 'user-1'
+      await expect(
+        engine.issue('attacker-99', {
+          userId: 'attacker-99',
+          domain: 'coding',
+          objective: 'Steal the challenge',
+          difficulty: 5,
+        }),
+      ).rejects.toThrow(UnauthorizedChallengeError);
+    });
   });
 
   describe('2. Negotiate Challenge', () => {

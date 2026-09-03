@@ -318,7 +318,7 @@ export class ResponsePlanner {
       if (this.deps.eventStore) {
         await this.deps.eventStore.append({
           userId,
-          eventType: easterEgg.authorized ? 'rival_easter_egg_discovered' : 'rival_interaction' as any,
+          eventType: easterEgg.authorized ? 'rival_easter_egg_discovered' : 'rival_interaction',
           source: easterEgg.authorized ? 'system' : 'user_action',
           payload: easterEgg.authorized
             ? { id: easterEgg.id, sourceInteractionEventIds: easterEgg.sourceEventIds }
