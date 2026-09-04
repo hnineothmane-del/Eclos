@@ -97,7 +97,7 @@ export async function acceptChallenge(challengeId: string) {
     },
   });
   if (error) throw error;
-  return data;
+  return data?.data ?? data;
 }
 
 export async function startChallenge(challengeId: string) {
@@ -109,7 +109,7 @@ export async function startChallenge(challengeId: string) {
     },
   });
   if (error) throw error;
-  return data;
+  return data?.data ?? data;
 }
 
 export async function attemptChallenge(challengeId: string) {
@@ -121,7 +121,7 @@ export async function attemptChallenge(challengeId: string) {
     },
   });
   if (error) throw error;
-  return data;
+  return data?.data ?? data;
 }
 
 export async function declineChallenge(challengeId: string) {
@@ -133,7 +133,7 @@ export async function declineChallenge(challengeId: string) {
     },
   });
   if (error) throw error;
-  return data;
+  return data?.data ?? data;
 }
 
 export async function submitEvidence(challengeId: string, content: string) {
