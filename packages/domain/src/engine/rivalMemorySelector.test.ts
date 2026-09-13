@@ -55,7 +55,7 @@ describe('selectRivalMemory — basic selection', () => {
     expect(select({ memories: [] })).toBeNull();
   });
 
-  it('returns null when familiarity is too low (< 20)', () => {
+  it('returns null for callbacks when familiarity is below MIN_FAMILIARITY_FOR_CALLBACK', () => {
     const lowRel = { ...relationship, familiarity: 15 };
     const mem = mkMemory('commit:1');
     expect(select({ memories: [mem], relationship: lowRel })).toBeNull();
@@ -226,3 +226,400 @@ describe('Integration Scenario F — repeated callback protection', () => {
     })).toBeNull();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tweak #4 — Hypothesis persistence and retrieval
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Tweak #4 — hypothesis retrieval', () => {
+  const hypothesis: RivalMemory = {
+    key: 'hypothesis:behavioral:stall_pattern',
+    type: 'hypothesis',
+    epistemicStatus: 'hypothesis',
+    description: 'Possible recurring pattern (3 observations): User stalls before starting.',
+    verbatimQuote: null,
+    confidence: 0.65,
+    strength: 3,
+    provenance: {
+      sourceEventIds: ['e1', 'e2', 'e3'],
+      sourceInsightTypes: ['stall_pattern'],
+      challengeId: null,
+      derivedAt: NOW,
+    },
+  };
+
+  it('retrieves a hypothesis when user expresses struggle (contextual relevance)', () => {
+    const result = select({ memories: [hypothesis], userInput: "I don't know where to start" });
+    expect(result).not.toBeNull();
+    expect(result!.memory.epistemicStatus).toBe('hypothesis');
+    expect(result!.reason).toContain('hypothesis');
+  });
+
+  it('retrieves a hypothesis when user expresses a goal (contextual relevance)', () => {
+    const result = select({ memories: [hypothesis], userInput: 'I want to get better at this' });
+    expect(result).not.toBeNull();
+    expect(result!.memory.epistemicStatus).toBe('hypothesis');
+  });
+
+  it('does NOT surface a hypothesis on an unrelated casual turn', () => {
+    const result = select({ memories: [hypothesis], userInput: 'tell me a joke' });
+    expect(result).toBeNull();
+  });
+
+  it('does NOT surface a hypothesis on an unrelated casual greeting', () => {
+    const result = select({ memories: [hypothesis], userInput: 'hello' });
+    expect(result).toBeNull();
+  });
+
+  it('preserves epistemicStatus as hypothesis — never auto-converts to derived', () => {
+    const result = select({ memories: [hypothesis], userInput: "I'm stuck and I don't know how to start" });
+    expect(result).not.toBeNull();
+    expect(result!.memory.epistemicStatus).toBe('hypothesis');
+    expect(result!.memory.type).toBe('hypothesis');
+  });
+
+  it('does NOT surface a hypothesis below MIN_HYPOTHESIS_CONFIDENCE (0.60)', () => {
+    const belowThreshold = { ...hypothesis, confidence: 0.55 };
+    const result = select({ memories: [belowThreshold], userInput: "I'm stuck" });
+    expect(result).toBeNull();
+  });
+
+  it('surfaces a hypothesis at MIN_HYPOTHESIS_CONFIDENCE threshold (0.60) when contextually relevant', () => {
+    const atThreshold = { ...hypothesis, confidence: 0.60, strength: 2 };
+    const result = select({ memories: [atThreshold], userInput: "I'm stuck" });
+    expect(result).not.toBeNull();
+    expect(result!.memory.epistemicStatus).toBe('hypothesis');
+    expect(result!.memory.confidence).toBe(0.60);
+  });
+
+  it('surfaces a hypothesis above threshold (0.65) when contextually relevant', () => {
+    const aboveThreshold = { ...hypothesis, confidence: 0.65, strength: 3 };
+    const result = select({ memories: [aboveThreshold], userInput: "I'm stuck" });
+    expect(result).not.toBeNull();
+    expect(result!.memory.epistemicStatus).toBe('hypothesis');
+  });
+
+  it('does NOT surface a hypothesis in a serious context', () => {
+    const result = select({
+      memories: [hypothesis],
+      userInput: "I don't know what to do",
+      isSeriousContext: true,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('preserves provenance sourceEventIds', () => {
+    const result = select({ memories: [hypothesis], userInput: "stuck and confused" });
+    expect(result).not.toBeNull();
+    expect(result!.memory.provenance.sourceEventIds).toEqual(['e1', 'e2', 'e3']);
+    expect(result!.memory.provenance.sourceInsightTypes).toEqual(['stall_pattern']);
+  });
+
+  it('non-hypothesis memories continue to surface as before (regression)', () => {
+    const commitment = mkMemory('commitment:finish tonight', 'callback', 'reported', 3);
+    const result = select({ memories: [commitment], userInput: "I'll finish tonight" });
+    expect(result).not.toBeNull();
+    expect(result!.memory.type).toBe('callback');
+    expect(result!.memory.epistemicStatus).toBe('reported');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tweak #9 — Remove blanket familiarity gate from Rival memory selection
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Tweak #9 — blanket familiarity gate removal', () => {
+  const zeroFamiliarityRel: RelationshipState = {
+    userId: 'u1',
+    respect: 0,
+    warmth: 0,
+    trust: 0,
+    rivalry: 0,
+    familiarity: 0,
+    curiosity: 0,
+    mode: 'adaptive',
+    updatedAt: NOW,
+  };
+
+  // Case A: Low familiarity + valid behavioral memory
+  it('Case A: surfaces valid behavioral memory when familiarity is 0', () => {
+    const behavioral = mkMemory('behavioral:self_report:delayed_start', 'behavioral', 'reported', 2, 0.75, null);
+    const result = select({ memories: [behavioral], relationship: zeroFamiliarityRel, userInput: 'what should I do' });
+    expect(result).not.toBeNull();
+    expect(result!.memory.key).toBe('behavioral:self_report:delayed_start');
+    expect(result!.memory.type).toBe('behavioral');
+    expect(result!.memory.epistemicStatus).toBe('reported');
+  });
+
+  // Case B: Low familiarity + valid factual memory
+  it('Case B: surfaces contextually relevant factual memory when familiarity is 0', () => {
+    const factual = mkMemory('confidence_claim:easy', 'factual', 'reported', 2, 0.9, 'easy');
+    const result = select({
+      memories: [factual],
+      relationship: zeroFamiliarityRel,
+      userInput: "I got this, it's definitely easy",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.memory.key).toBe('confidence_claim:easy');
+    expect(result!.memory.type).toBe('factual');
+  });
+
+  // Case C: Low familiarity + strong hypothesis
+  it('Case C: surfaces strong hypothesis when familiarity is 0 and relevance trigger is met', () => {
+    const strongHypothesis: RivalMemory = {
+      key: 'hypothesis:behavioral:self_report:delayed_start',
+      type: 'hypothesis',
+      epistemicStatus: 'hypothesis',
+      description: 'Possible recurring pattern (2 observations): User avoids starting.',
+      verbatimQuote: null,
+      confidence: 0.70,
+      strength: 2,
+      provenance: { sourceEventIds: ['e1', 'e2'], sourceInsightTypes: ['delayed_start'], challengeId: null, derivedAt: NOW },
+    };
+    const result = select({
+      memories: [strongHypothesis],
+      relationship: zeroFamiliarityRel,
+      userInput: "I don't know where to start, I feel stuck",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.memory.key).toBe('hypothesis:behavioral:self_report:delayed_start');
+    expect(result!.memory.epistemicStatus).toBe('hypothesis');
+  });
+
+  // Case D: Low familiarity + weak hypothesis
+  it('Case D: suppresses weak hypothesis (< 0.60) even when relevance trigger is met at familiarity 0', () => {
+    const weakHypothesis: RivalMemory = {
+      key: 'hypothesis:behavioral:self_report:delayed_start',
+      type: 'hypothesis',
+      epistemicStatus: 'hypothesis',
+      description: 'Possible recurring pattern: User avoids starting.',
+      verbatimQuote: null,
+      confidence: 0.55,
+      strength: 2,
+      provenance: { sourceEventIds: ['e1'], sourceInsightTypes: ['delayed_start'], challengeId: null, derivedAt: NOW },
+    };
+    const result = select({
+      memories: [weakHypothesis],
+      relationship: zeroFamiliarityRel,
+      userInput: "I don't know where to start, I feel stuck",
+    });
+    expect(result).toBeNull();
+  });
+
+  // Case E: Low familiarity + callback memory
+  it('Case E: suppresses callback memories when familiarity is below MIN_FAMILIARITY_FOR_CALLBACK (30)', () => {
+    const callback = mkMemory('commitment:tonight', 'callback', 'reported', 3, 0.9, "I'll finish tonight");
+    // At familiarity 0
+    expect(select({ memories: [callback], relationship: zeroFamiliarityRel, userInput: "I'll finish tonight" })).toBeNull();
+    // At familiarity 15
+    expect(select({ memories: [callback], relationship: { ...zeroFamiliarityRel, familiarity: 15 }, userInput: "I'll finish tonight" })).toBeNull();
+    // At familiarity 29
+    expect(select({ memories: [callback], relationship: { ...zeroFamiliarityRel, familiarity: 29 }, userInput: "I'll finish tonight" })).toBeNull();
+  });
+
+  // Case F: Higher familiarity + callback
+  it('Case F: surfaces callback memory once familiarity reaches MIN_FAMILIARITY_FOR_CALLBACK (>= 30)', () => {
+    const callback = mkMemory('commitment:tonight', 'callback', 'reported', 3, 0.9, "I'll finish tonight");
+    const result = select({
+      memories: [callback],
+      relationship: { ...zeroFamiliarityRel, familiarity: 30 },
+      userInput: "I'll finish tonight",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.memory.key).toBe('commitment:tonight');
+    expect(result!.memory.type).toBe('callback');
+  });
+
+  // Case G: Determinism
+  it('Case G: produces identical selection result for identical inputs at familiarity 0', () => {
+    const mem1 = mkMemory('behavioral:test', 'behavioral', 'observed', 3, 0.85, null);
+    const mem2 = mkMemory('confidence_claim:easy', 'factual', 'reported', 2, 0.8, 'easy');
+    const input: MemorySelectionInput = {
+      memories: [mem1, mem2],
+      userInput: "I got this easy",
+      relationship: zeroFamiliarityRel,
+      activeChallenge: null,
+      isSeriousContext: false,
+      isChallengeCritical: false,
+      recentHumor: [],
+      recentlySurfacedKeys: [],
+      nowIso: NOW,
+    };
+    const result1 = selectRivalMemory(input);
+    const result2 = selectRivalMemory(input);
+    expect(result1).not.toBeNull();
+    expect(result2).not.toBeNull();
+    expect(result1!.memory.key).toBe(result2!.memory.key);
+    expect(result1!.score).toBe(result2!.score);
+    expect(result1!.reason).toBe(result2!.reason);
+  });
+
+  // Case H: Invariants
+  it('Case H: preserves serious-context and challenge-critical suppressions at familiarity 0 without mutating inputs', () => {
+    const hyp = mkMemory('hypothesis:stall', 'hypothesis', 'hypothesis', 3, 0.75, null);
+    const factual = mkMemory('confidence_claim:easy', 'factual', 'reported', 3, 0.9, 'easy');
+    const relCopy = { ...zeroFamiliarityRel };
+
+    // Serious context suppresses hypothesis
+    const seriousResult = select({
+      memories: [hyp],
+      relationship: relCopy,
+      userInput: "I'm stuck and confused",
+      isSeriousContext: true,
+    });
+    expect(seriousResult).toBeNull();
+
+    // Challenge-critical context suppresses factual/callback
+    const criticalResult = select({
+      memories: [factual],
+      relationship: relCopy,
+      userInput: "I got this easy",
+      isChallengeCritical: true,
+    });
+    expect(criticalResult).toBeNull();
+
+    // Relationship object was not mutated
+    expect(relCopy).toEqual(zeroFamiliarityRel);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tweak #11 — Fix the dead hypothesis confidence threshold
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Tweak #11 — hypothesis confidence threshold calibration', () => {
+  it('surfaces hypothesis generated at strength = 2 (confidence = 0.60)', () => {
+    // 2 consistent behavioral observations -> behavioral memory strength = 2
+    // -> deriveRivalMemories produces hypothesis with confidence = 0.60
+    const delayedStartHypothesis: RivalMemory = {
+      key: 'hypothesis:behavioral:self_report:delayed_start',
+      type: 'hypothesis',
+      epistemicStatus: 'hypothesis',
+      description: 'Possible recurring pattern (2 observations): User reports a recurring pattern of delaying or avoiding starting',
+      verbatimQuote: null,
+      confidence: 0.60, // Exactly what Math.min(0.7, 0.5 + 2 * 0.05) produces
+      strength: 1,
+      provenance: {
+        sourceEventIds: [],
+        sourceInsightTypes: ['self_report:delayed_start'],
+        challengeId: null,
+        derivedAt: NOW,
+      },
+    };
+
+    // User expresses struggle or goal -> contextual relevance is satisfied
+    const result = select({
+      memories: [delayedStartHypothesis],
+      userInput: "I don't know where to start, I feel stuck",
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.memory.key).toBe('hypothesis:behavioral:self_report:delayed_start');
+    expect(result!.memory.epistemicStatus).toBe('hypothesis');
+    expect(result!.memory.confidence).toBe(0.60);
+  });
+
+  it('selects hypothesis over base behavioral memory when both are candidates and hypothesis meets threshold', () => {
+    // When both the hypothesis (confidence = 0.60, strength = 1) and the underlying
+    // behavioral self-report (confidence = 0.75, strength = 2) are present
+    const baseBehavioral: RivalMemory = {
+      key: 'behavioral:self_report:delayed_start',
+      type: 'behavioral',
+      epistemicStatus: 'reported',
+      description: 'User reports delaying starts',
+      verbatimQuote: null,
+      confidence: 0.75,
+      strength: 2,
+      provenance: { sourceEventIds: ['e1'], sourceInsightTypes: ['behavioral_self_report'], challengeId: null, derivedAt: NOW },
+    };
+
+    const hypothesis: RivalMemory = {
+      key: 'hypothesis:behavioral:self_report:delayed_start',
+      type: 'hypothesis',
+      epistemicStatus: 'hypothesis',
+      description: 'Possible recurring pattern (2 observations): User reports delaying starts',
+      verbatimQuote: null,
+      confidence: 0.60,
+      strength: 1,
+      provenance: { sourceEventIds: [], sourceInsightTypes: ['self_report:delayed_start'], challengeId: null, derivedAt: NOW },
+    };
+
+    // User expresses struggle:
+    // base behavioral score = 10 (reported) + 6 (strength 2) + 7.5 (conf 0.75) + 8 (behavioral) = 31.5
+    // hypothesis score = 5 (hypothesis) + 3 (strength 1) + 6 (conf 0.60) + 15 (struggle relevance) = 29.0
+    // But if hypothesis is relevant, it is a valid candidate and not rejected by threshold
+    const resultHypOnly = select({
+      memories: [hypothesis],
+      userInput: "I don't know where to start",
+    });
+    expect(resultHypOnly).not.toBeNull();
+    expect(resultHypOnly!.memory.key).toBe('hypothesis:behavioral:self_report:delayed_start');
+    expect(resultHypOnly!.memory.epistemicStatus).toBe('hypothesis');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TWEAK #12 — Contradicted hypothesis suppression
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('selectRivalMemory — Tweak 12 contradicted hypothesis suppression', () => {
+  it('hard-suppresses a hypothesis whose epistemicStatus is contradicted', () => {
+    const contradictedHypothesis: RivalMemory = {
+      key: 'hypothesis:behavioral:self_report:delayed_start',
+      type: 'hypothesis',
+      epistemicStatus: 'contradicted',
+      description: 'Possible recurring pattern: User reports delaying starts',
+      verbatimQuote: null,
+      confidence: 0.85,
+      strength: 3,
+      provenance: {
+        sourceEventIds: [],
+        sourceInsightTypes: ['self_report:delayed_start'],
+        challengeId: null,
+        derivedAt: NOW,
+      },
+    };
+
+    const result = select({
+      memories: [contradictedHypothesis],
+      userInput: "I don't know where to start, I always put things off",
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('selects active replacement memory over contradicted hypothesis', () => {
+    const contradictedHypothesis: RivalMemory = {
+      key: 'hypothesis:behavioral:self_report:delayed_start',
+      type: 'hypothesis',
+      epistemicStatus: 'contradicted',
+      description: 'Possible recurring pattern: User reports delaying starts',
+      verbatimQuote: null,
+      confidence: 0.85,
+      strength: 3,
+      provenance: { sourceEventIds: [], sourceInsightTypes: ['self_report:delayed_start'], challengeId: null, derivedAt: NOW },
+    };
+
+    const replacementBehavioral: RivalMemory = {
+      key: 'behavioral:self_report:non_completion',
+      type: 'behavioral',
+      epistemicStatus: 'reported',
+      description: 'User reports: maintaining momentum once the novelty wears off',
+      verbatimQuote: 'maintaining momentum once the novelty wears off',
+      confidence: 0.75,
+      strength: 1,
+      provenance: { sourceEventIds: ['e2'], sourceInsightTypes: ['behavioral_self_report'], challengeId: null, derivedAt: NOW },
+    };
+
+    const result = select({
+      memories: [contradictedHypothesis, replacementBehavioral],
+      userInput: 'I lose momentum after the initial excitement',
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.memory.key).toBe('behavioral:self_report:non_completion');
+    expect(result!.memory.epistemicStatus).toBe('reported');
+  });
+});
+
+

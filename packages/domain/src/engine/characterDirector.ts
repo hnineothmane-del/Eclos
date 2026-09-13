@@ -38,6 +38,7 @@ export type DirectorHumorMechanism =
 
 export type HumorTarget =
   | 'current_behavior'
+  | 'user_statement'
   | 'process_insight'
   | 'historical_callback'
   | 'user_claim'
@@ -88,7 +89,23 @@ const achievementTerms = ['finished', 'completed', 'passed', 'shipped', 'did it'
 const trollTerms = ['this is bullshit', 'you suck', 'shut up', 'stupid bot', 'useless'];
 const metaTerms = ['this app', 'the app', 'you are an ai', 'bot', 'system'];
 const lowValueTerms = ['ok', 'okay', 'k', 'lol'];
-const goalClaimTerms = ['i want', 'get better', 'learn', 'study', 'practice', 'finish', 'build', 'write', 'train', 'get in shape'];
+// Only specific, directional goal statements — not casual "I want" or generic verbs
+const goalClaimTerms = [
+  'i want to get better at',
+  'i want to learn',
+  'i want to practice',
+  'i want to study',
+  'i want to train',
+  'i want to build',
+  'i want to write',
+  'i want to finish',
+  'trying to get better at',
+  'trying to learn',
+  'trying to practice',
+  'get in shape',
+  'i am training',
+  "i'm training",
+];
 
 function hasInsight(insights: readonly ProcessInsight[], types: readonly ProcessInsight['type'][]): boolean {
   return insights.some((insight) => types.includes(insight.type));
@@ -122,7 +139,10 @@ function chooseHumor(input: CharacterDirectorInput, state: RivalCharacterState, 
   const recent = new Set(input.recentHumor);
   const intensity = clamp(Math.min(state.intensity, relationshipContext.teasingWarmth >= 5 ? 8 : 4));
   const process = firstInsight(input.processInsights, ['initialization_delay', 'stall_then_recovery', 'strategy_switch', 'repeated_strategy_switch']);
-  const message = input.userInput.toLowerCase();
+  const message = input.userInput.toLowerCase().trim();
+  // Low-value inputs ('ok', 'k', 'lol') belong to 'quiet' interactionMode — no humor signal.
+  if (message.length <= 3 || lowValueTerms.includes(message)) return null;
+
 
   if (process && !recent.has('observational')) {
     return { mechanism: 'observational', target: 'process_insight', intensity, reason: 'grounded process observation is relevant', sourceEventIds: [...process.sourceEventIds] };
@@ -139,6 +159,19 @@ function chooseHumor(input: CharacterDirectorInput, state: RivalCharacterState, 
   if (input.activeChallenge && hasAny(message, achievementTerms) && input.activeChallenge.status !== 'evidence_submitted' && !recent.has('irony')) {
     return { mechanism: 'irony', target: 'user_claim', intensity, reason: 'claim remains unverified against an active challenge', sourceEventIds: [] };
   }
+
+  // ── Fallback: Character-expression humor for casual/playful moods ─────────
+  // When no specific condition fired, the Rival still has a natural humor
+  // inclination on casual turns. Without this, the LLM receives no humor signal
+  // and defaults to productivity framing. Choose the first fresh mechanism.
+  if (state.mood === 'playful' || state.mood === 'amused' || state.mood === 'curious' || state.mood === 'smug') {
+    const fallbackOptions: DirectorHumorMechanism[] = ['wit', 'mock_formal', 'observational', 'deadpan', 'sarcasm', 'absurd_escalation'];
+    const chosen = fallbackOptions.find(m => !recent.has(m));
+    if (chosen) {
+      return { mechanism: chosen, target: 'user_statement', intensity, reason: 'character default expression for casual interaction', sourceEventIds: [] };
+    }
+  }
+
   return null;
 }
 
@@ -162,8 +195,11 @@ export function deriveCharacterPlan(input: CharacterDirectorInput): CharacterPla
   else if (message.length <= 3 || lowValueTerms.includes(message)) interactionMode = 'quiet';
   else if (humor?.target === 'process_insight') interactionMode = 'observation';
   else if (humor?.target === 'historical_callback') interactionMode = 'callback';
-  else if (input.activeChallenge?.status === 'issued' || input.activeChallenge?.status === 'negotiated') interactionMode = 'challenge_invitation';
-  else if (!input.activeChallenge && hasAny(message, goalClaimTerms)) interactionMode = 'challenge_invitation';
+  // Character First Hierarchy:
+  // If the user is just chatting or reporting achievements, banter is appropriate.
+  // We do NOT automatically hijack the turn with challenge_invitation just because a challenge is pending.
+  else if (hasAny(message, achievementTerms)) interactionMode = 'banter';
+  else if (hasAny(message, goalClaimTerms)) interactionMode = 'challenge_invitation';
   else interactionMode = 'banter';
 
   return { state, interactionMode, humor, sincerity, target: humor?.target || null };

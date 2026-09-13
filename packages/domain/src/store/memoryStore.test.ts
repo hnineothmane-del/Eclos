@@ -25,6 +25,8 @@ function createMockClient(): { client: SupabaseClientLike; mockQuery: any } {
     }),
     eq: vi.fn().mockReturnThis(),
     delete: vi.fn().mockReturnThis(),
+    update: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockReturnThis(),
     lte: vi.fn().mockResolvedValue({
       data: [{ id: 'expired-1' }, { id: 'expired-2' }],
       error: null,
@@ -168,5 +170,154 @@ describe('SupabaseMemoryStore', () => {
         value: 'y',
       }),
     ).rejects.toThrow(StoreValidationError);
+  });
+
+  describe('incrementStrength', () => {
+    it('uses RPC when available and maps row correctly', async () => {
+      const { client } = createMockClient();
+      (client.rpc as any).mockResolvedValueOnce({
+        data: {
+          id: 'mem-1',
+          user_id: 'user-abc',
+          tier: 'permanent',
+          category: 'observation',
+          key: 'behavioral:self_report:delayed_start',
+          value: { description: 'procrastination' },
+          strength: 2,
+          last_accessed_at: '2026-08-29T00:00:00.000Z',
+          expires_at: null,
+          created_at: '2026-08-29T00:00:00.000Z',
+          updated_at: '2026-08-29T00:00:00.000Z',
+        },
+        error: null,
+      });
+
+      const store = new SupabaseMemoryStore(client);
+      const result = await store.incrementStrength('user-abc', 'behavioral:self_report:delayed_start', 1);
+
+      expect(client.rpc).toHaveBeenCalledWith('increment_memory_strength', {
+        p_user_id: 'user-abc',
+        p_key: 'behavioral:self_report:delayed_start',
+        p_delta: 1,
+      });
+      expect(result).not.toBeNull();
+      expect(result!.strength).toBe(2);
+      expect(result!.key).toBe('behavioral:self_report:delayed_start');
+    });
+
+    it('falls back to row update when RPC is not available', async () => {
+      const { client, mockQuery } = createMockClient();
+      (client.rpc as any).mockResolvedValueOnce({
+        data: null,
+        error: { message: 'function does not exist' },
+      });
+
+      // mock select row
+      mockQuery.eq.mockReturnValueOnce(mockQuery);
+      mockQuery.eq.mockReturnValueOnce(mockQuery);
+      mockQuery.limit.mockResolvedValueOnce({
+        data: [{
+          id: 'mem-1',
+          user_id: 'user-abc',
+          tier: 'permanent',
+          category: 'observation',
+          key: 'behavioral:self_report:delayed_start',
+          value: { description: 'procrastination' },
+          strength: 1,
+          last_accessed_at: '2026-08-29T00:00:00.000Z',
+          expires_at: null,
+          created_at: '2026-08-29T00:00:00.000Z',
+          updated_at: '2026-08-29T00:00:00.000Z',
+        }],
+        error: null,
+      });
+
+      // mock update returning updated row
+      mockQuery.single.mockResolvedValueOnce({
+        data: {
+          id: 'mem-1',
+          user_id: 'user-abc',
+          tier: 'permanent',
+          category: 'observation',
+          key: 'behavioral:self_report:delayed_start',
+          value: { description: 'procrastination' },
+          strength: 2,
+          last_accessed_at: '2026-08-29T00:00:00.000Z',
+          expires_at: null,
+          created_at: '2026-08-29T00:00:00.000Z',
+          updated_at: '2026-08-29T00:00:00.000Z',
+        },
+        error: null,
+      });
+
+      const store = new SupabaseMemoryStore(client);
+      const result = await store.incrementStrength('user-abc', 'behavioral:self_report:delayed_start', 1);
+
+      expect(mockQuery.update).toHaveBeenCalledWith(
+        expect.objectContaining({ strength: 2 }),
+      );
+      expect(result).not.toBeNull();
+      expect(result!.strength).toBe(2);
+    });
+
+    it('clamps strength to max 100 on fallback', async () => {
+      const { client, mockQuery } = createMockClient();
+      (client.rpc as any).mockResolvedValueOnce({
+        data: null,
+        error: { message: 'function does not exist' },
+      });
+
+      mockQuery.eq.mockReturnValueOnce(mockQuery);
+      mockQuery.eq.mockReturnValueOnce(mockQuery);
+      mockQuery.limit.mockResolvedValueOnce({
+        data: [{
+          id: 'mem-1',
+          user_id: 'user-abc',
+          tier: 'permanent',
+          category: 'observation',
+          key: 'behavioral:self_report:delayed_start',
+          value: { description: 'procrastination' },
+          strength: 99.5,
+          last_accessed_at: '2026-08-29T00:00:00.000Z',
+          expires_at: null,
+          created_at: '2026-08-29T00:00:00.000Z',
+          updated_at: '2026-08-29T00:00:00.000Z',
+        }],
+        error: null,
+      });
+
+      mockQuery.single.mockResolvedValueOnce({
+        data: {
+          id: 'mem-1',
+          user_id: 'user-abc',
+          tier: 'permanent',
+          category: 'observation',
+          key: 'behavioral:self_report:delayed_start',
+          value: { description: 'procrastination' },
+          strength: 100,
+          last_accessed_at: '2026-08-29T00:00:00.000Z',
+          expires_at: null,
+          created_at: '2026-08-29T00:00:00.000Z',
+          updated_at: '2026-08-29T00:00:00.000Z',
+        },
+        error: null,
+      });
+
+      const store = new SupabaseMemoryStore(client);
+      const result = await store.incrementStrength('user-abc', 'behavioral:self_report:delayed_start', 2);
+
+      expect(mockQuery.update).toHaveBeenCalledWith(
+        expect.objectContaining({ strength: 100 }),
+      );
+      expect(result!.strength).toBe(100);
+    });
+
+    it('validates userId and key', async () => {
+      const { client } = createMockClient();
+      const store = new SupabaseMemoryStore(client);
+
+      await expect(store.incrementStrength('', 'key')).rejects.toThrow(StoreValidationError);
+      await expect(store.incrementStrength('user-1', '')).rejects.toThrow(StoreValidationError);
+    });
   });
 });

@@ -106,18 +106,37 @@ serve(async (req) => {
     const activeChallenge = challengeRows?.[0] ? mapChallenge(challengeRows[0]) : null;
     const modelRouter = new DefaultModelRouter({ apiKey: geminiApiKey, cheapModel, strongModel, multimodalModel });
     const dbClient = trustedClient as any;
+    const eventStore = new SupabaseEventStore(dbClient);
     const planner = new ResponsePlanner({
       modelRouter,
       relationshipStore: new SupabaseRelationshipStateStore(dbClient),
       memoryStore: new SupabaseMemoryStore(dbClient),
       humorStore: new SupabaseHumorStateStore(dbClient),
-      eventStore: new SupabaseEventStore(dbClient),
+      eventStore,
     });
     
     const tPlanStart = performance.now();
+    
+    // Write chat_message_sent event BEFORE planning the turn so derivation can see it
+    let chatEvent: any = null;
+    if (userInput && !ambientDecision) {
+      try {
+        chatEvent = await eventStore.append({
+          userId: user.id,
+          eventType: 'chat_message_sent',
+          source: 'user_action',
+          payload: { content: userInput },
+        });
+      } catch (e) {
+        console.error('Failed to append chat_message_sent event:', e);
+      }
+    }
+
+    const nowIso = chatEvent?.createdAt || new Date().toISOString();
+
     const aiResponse = ambientDecision
       ? await planner.planAmbientTurn({ userId: user.id, presenceDecision: ambientDecision as PresenceDecision, activeChallenge })
-      : await planner.planTurn({ userId: user.id, userInput, activeChallenge, presenceDecision: presenceDecision as PresenceDecision | null, interactionHook: interactionHook as any, nowIso: new Date().toISOString() });
+      : await planner.planTurn({ userId: user.id, userInput, activeChallenge, presenceDecision: presenceDecision as PresenceDecision | null, interactionHook: interactionHook as any, nowIso });
     const tPlanEnd = performance.now();
 
     console.log(`[TIMING] Auth: ${Math.round(tAuthEnd - tAuthStart)}ms, Usage: ${Math.round(tUsageEnd - tUsageStart)}ms, ChallengeLookup: ${Math.round(tChallengeEnd - tChallengeStart)}ms, AI PlanTurn: ${Math.round(tPlanEnd - tPlanStart)}ms, Total (so far): ${Math.round(tPlanEnd - tAuthStart)}ms`);

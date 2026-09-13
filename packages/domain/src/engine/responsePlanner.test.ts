@@ -18,7 +18,11 @@ function setup(response: any, memories: RankedMemoryItem[] = []) {
   const deps: any = {
     modelRouter: { forChat: () => ({ generate }) } as unknown as ModelRouter,
     relationshipStore: { get: vi.fn().mockResolvedValue(relationship) } as unknown as IRelationshipStateStore,
-    memoryStore: { retrieveRelevant: vi.fn().mockResolvedValue(memories), write: vi.fn().mockResolvedValue({}) } as unknown as IMemoryStore,
+    memoryStore: {
+      retrieveRelevant: vi.fn().mockResolvedValue(memories),
+      write: vi.fn().mockResolvedValue({}),
+      incrementStrength: vi.fn().mockResolvedValue({}),
+    } as unknown as IMemoryStore,
     humorStore: { recentMechanisms: vi.fn().mockResolvedValue([]), record: vi.fn().mockResolvedValue({}) } as unknown as IHumorStateStore,
   };
   return { planner: new ResponsePlanner(deps), deps, generate };
@@ -159,4 +163,451 @@ describe('ResponsePlanner', () => {
     await ordinary.planner.planTurn({ userId: 'u1', userInput: 'I am stuck on this function', nowIso: '2026-01-01T12:00:00.000Z' });
     expect(ordinary.deps.externalContextProvider.getRelevantContext).not.toHaveBeenCalled();
   });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Tweak #4 — Hypothesis persistence
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  it('Tweak #4: persists a derived hypothesis memory to the memory store (no longer silently discarded)', async () => {
+    // A behavioral memory with strength >= 2 triggers a hypothesis in deriveRivalMemories
+    const behavioralMemory = {
+      id: 'm1', userId: 'u1', tier: 'permanent' as const, category: 'observation' as const,
+      key: 'behavioral:stall_pattern', value: 'User repeatedly stalls at the start of a task',
+      strength: 3, lastAccessedAt: '2026-01-01T00:00:00Z', expiresAt: null,
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    };
+    const { planner, deps } = setup({ response: 'ok', intent: 'x' }, [{ score: 10, item: behavioralMemory }]);
+    deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+    await planner.planTurn({ userId: 'u1', userInput: 'hello', nowIso: '2026-01-01T12:00:00.000Z' });
+
+    // memoryStore.write should have been called at some point for the hypothesis
+    const writeCalls = (deps.memoryStore.write as ReturnType<typeof vi.fn>).mock.calls;
+    const hypothesisWrite = writeCalls.find((args: any[]) =>
+      typeof args[0]?.key === 'string' && args[0].key.startsWith('hypothesis:')
+    );
+    expect(hypothesisWrite).toBeDefined();
+    // Epistemic status is embedded in the JSON value
+    const parsedValue = JSON.parse(hypothesisWrite![0].value as string);
+    expect(parsedValue.epistemicStatus).toBe('hypothesis');
+    // Tier is permanent (hypotheses are persistent beliefs)
+    expect(hypothesisWrite![0].tier).toBe('permanent');
+  });
+
+  it('Tweak #4: non-hypothesis memories continue to be persisted as before (regression)', async () => {
+    const { planner, deps } = setup({ response: 'ok', intent: 'x' });
+    deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+    await planner.planTurn({ userId: 'u1', userInput: "I'll finish this tonight", nowIso: '2026-01-01T12:00:00.000Z' });
+
+    // commitment memory (epistemicStatus: reported) must still be written
+    const writeCalls = (deps.memoryStore.write as ReturnType<typeof vi.fn>).mock.calls;
+    const commitmentWrite = writeCalls.find((args: any[]) =>
+      typeof args[0]?.key === 'string' && args[0].key.startsWith('commitment:')
+    );
+    expect(commitmentWrite).toBeDefined();
+    const parsedValue = JSON.parse(commitmentWrite![0].value as string);
+    expect(parsedValue.epistemicStatus).toBe('reported');
+  });
+
+  it('Tweak #4: prompt renders TENTATIVE RIVAL BELIEF — not GROUNDED RIVAL MEMORY — for hypothesis', async () => {
+    const behavioralMemory = {
+      id: 'm1', userId: 'u1', tier: 'permanent' as const, category: 'observation' as const,
+      key: 'behavioral:stall_pattern', value: 'User repeatedly stalls',
+      strength: 3, lastAccessedAt: '2026-01-01T00:00:00Z', expiresAt: null,
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    };
+    const { planner, deps, generate } = setup({ response: 'ok', intent: 'x' }, [{ score: 10, item: behavioralMemory }]);
+    deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+    // Use a struggle input so the hypothesis passes the relevance gate in selectRivalMemory
+    await planner.planTurn({ userId: 'u1', userInput: "I don't know where to start", nowIso: '2026-01-01T12:00:00.000Z' });
+
+    const prompt: string = generate.mock.calls[0]?.[0]?.prompt ?? '';
+    if (prompt.includes('CURRENT TENTATIVE RIVAL BELIEF')) {
+      // When hypothesis selected — correct labelling
+      expect(prompt).toContain('CURRENT TENTATIVE RIVAL BELIEF');
+      expect(prompt).toContain('may be wrong');
+      expect(prompt).not.toContain('GROUNDED RIVAL MEMORY');
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Tweak #7 — Preserve epistemic status of retrieved stored memories
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  it('Tweak #7: stored hypothesis retrieved from memoryStore preserves epistemicStatus and renders as TENTATIVE RIVAL BELIEF', async () => {
+    const storedHypothesis = {
+      id: 'hyp-1', userId: 'u1', tier: 'permanent' as const, category: 'observation' as const,
+      key: 'hypothesis:behavioral:delayed_start',
+      value: JSON.stringify({
+        description: 'Possible recurring pattern: user delays starting tasks',
+        epistemicStatus: 'hypothesis',
+        type: 'hypothesis',
+        provenance: { sourceEventIds: [], sourceInsightTypes: ['delayed_start'], challengeId: null, derivedAt: '2026-01-01T00:00:00Z' },
+      }),
+      strength: 70, lastAccessedAt: '2026-01-01T00:00:00Z', expiresAt: null,
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    };
+
+    const { planner, deps, generate } = setup({ response: 'ok', intent: 'x' }, [{ score: 25, item: storedHypothesis }]);
+    deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+    // Use struggle words to trigger hypothesis contextual relevance
+    await planner.planTurn({ userId: 'u1', userInput: "I am stuck and don't know where to start", nowIso: '2026-01-01T12:00:00.000Z' });
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    const prompt: string = generate.mock.calls[0]?.[0]?.prompt ?? '';
+    // Must render as CURRENT TENTATIVE RIVAL BELIEF, not GROUNDED RIVAL MEMORY
+    expect(prompt).toContain('CURRENT TENTATIVE RIVAL BELIEF');
+    expect(prompt).toContain('Possible recurring pattern: user delays starting tasks');
+    expect(prompt).not.toContain('authority: reported');
+  });
+
+  it('Tweak #7: stored observed memory preserves epistemicStatus: observed and does not downgrade to reported', async () => {
+    const storedObserved = {
+      id: 'obs-1', userId: 'u1', tier: 'permanent' as const, category: 'milestone' as const,
+      key: 'relationship:first_success',
+      value: JSON.stringify({
+        description: 'User successfully completed their first challenge',
+        verbatimQuote: null,
+        epistemicStatus: 'observed',
+        type: 'relationship',
+        provenance: { sourceEventIds: ['ev-1'], sourceInsightTypes: [], challengeId: 'ch-1', derivedAt: '2026-01-01T00:00:00Z' },
+      }),
+      strength: 95, lastAccessedAt: '2026-01-01T00:00:00Z', expiresAt: null,
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    };
+
+    const { planner, deps, generate } = setup({ response: 'ok', intent: 'x' }, [{ score: 30, item: storedObserved }]);
+    deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+    await planner.planTurn({ userId: 'u1', userInput: "I'm ready for what's next", nowIso: '2026-01-01T12:00:00.000Z' });
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    const prompt: string = generate.mock.calls[0]?.[0]?.prompt ?? '';
+    // Authority must reflect observed, not reported
+    expect(prompt).toContain('authority: observed');
+    expect(prompt).toContain('[RELATIONSHIP] User successfully completed their first challenge');
+    expect(prompt).not.toContain('authority: reported');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Tweak #8 — Behavioral Evidence Reinforcement
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  describe('Tweak #8 — behavioral evidence reinforcement', () => {
+    it('first report writes with initial strength = 1', async () => {
+      const { planner, deps } = setup({ response: 'ok', intent: 'x' });
+      deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+      await planner.planTurn({ userId: 'u1', userInput: 'I keep putting things off until the last minute', nowIso: '2026-01-01T12:00:00.000Z' });
+
+      const writeCalls = (deps.memoryStore.write as ReturnType<typeof vi.fn>).mock.calls;
+      const delayedStartWrite = writeCalls.find((args: any[]) => args[0]?.key === 'behavioral:self_report:delayed_start');
+      expect(delayedStartWrite).toBeDefined();
+      expect(delayedStartWrite![0].strength).toBe(1);
+      // incrementStrength should not have been called because it is the first report
+      expect((deps.memoryStore.incrementStrength as any)).not.toHaveBeenCalled();
+    });
+
+    it('second matching report causes exactly one increment on existing memory', async () => {
+      const existingDelayedStart = {
+        id: 'mem-delay', userId: 'u1', tier: 'permanent' as const, category: 'observation' as const,
+        key: 'behavioral:self_report:delayed_start',
+        value: JSON.stringify({
+          description: 'User reports delaying starts',
+          epistemicStatus: 'reported',
+          type: 'behavioral',
+          confidence: 0.75,
+          provenance: { sourceEventIds: [], sourceInsightTypes: ['behavioral_self_report'], challengeId: null, derivedAt: '2026-01-01T00:00:00Z' },
+        }),
+        strength: 1, lastAccessedAt: '2026-01-01T00:00:00Z', expiresAt: null,
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      };
+
+      const { planner, deps } = setup({ response: 'ok', intent: 'x' }, [{ score: 20, item: existingDelayedStart }]);
+      deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+      // Send another matching self-report with equivalent phrasing
+      await planner.planTurn({ userId: 'u1', userInput: 'I procrastinate on starting anything', nowIso: '2026-01-02T12:00:00.000Z' });
+
+      // incrementStrength should be called with delta 1
+      expect((deps.memoryStore.incrementStrength as any)).toHaveBeenCalledTimes(1);
+      expect((deps.memoryStore.incrementStrength as any)).toHaveBeenCalledWith('u1', 'behavioral:self_report:delayed_start', 1);
+
+      // write should NOT be called for this key again (no duplication)
+      const writeCalls = (deps.memoryStore.write as ReturnType<typeof vi.fn>).mock.calls;
+      const delayedStartWrite = writeCalls.find((args: any[]) => args[0]?.key === 'behavioral:self_report:delayed_start');
+      expect(delayedStartWrite).toBeUndefined();
+    });
+
+    it('different behavioral categories do not reinforce each other', async () => {
+      const existingDelayedStart = {
+        id: 'mem-delay', userId: 'u1', tier: 'permanent' as const, category: 'observation' as const,
+        key: 'behavioral:self_report:delayed_start',
+        value: JSON.stringify({
+          description: 'User reports delaying starts',
+          epistemicStatus: 'reported',
+          type: 'behavioral',
+        }),
+        strength: 1, lastAccessedAt: '2026-01-01T00:00:00Z', expiresAt: null,
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      };
+
+      const { planner, deps } = setup({ response: 'ok', intent: 'x' }, [{ score: 20, item: existingDelayedStart }]);
+      deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+      // User reports overthinking (research_over_action), not delayed_start
+      await planner.planTurn({ userId: 'u1', userInput: 'I always overthink every single decision', nowIso: '2026-01-02T12:00:00.000Z' });
+
+      // delayed_start should NOT be incremented
+      expect((deps.memoryStore.incrementStrength as any)).not.toHaveBeenCalled();
+
+      // research_over_action should be newly written with initial strength 1
+      const writeCalls = (deps.memoryStore.write as ReturnType<typeof vi.fn>).mock.calls;
+      const researchWrite = writeCalls.find((args: any[]) => args[0]?.key === 'behavioral:self_report:research_over_action');
+      expect(researchWrite).toBeDefined();
+      expect(researchWrite![0].strength).toBe(1);
+    });
+
+    it('mentioning a keyword alone without self-report does NOT increment strength', async () => {
+      const existingDelayedStart = {
+        id: 'mem-delay', userId: 'u1', tier: 'permanent' as const, category: 'observation' as const,
+        key: 'behavioral:self_report:delayed_start',
+        value: JSON.stringify({
+          description: 'User reports delaying starts',
+          epistemicStatus: 'reported',
+          type: 'behavioral',
+        }),
+        strength: 1, lastAccessedAt: '2026-01-01T00:00:00Z', expiresAt: null,
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      };
+
+      const { planner, deps } = setup({ response: 'ok', intent: 'x' }, [{ score: 20, item: existingDelayedStart }]);
+      deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+      // Non-report context mentioning procrastination
+      await planner.planTurn({ userId: 'u1', userInput: 'I read an interesting essay on procrastination', nowIso: '2026-01-02T12:00:00.000Z' });
+
+      expect((deps.memoryStore.incrementStrength as any)).not.toHaveBeenCalled();
+    });
+
+    it('deduplicates reinforcement keys so a key is incremented at most once per turn', async () => {
+      const existingDelayedStart = {
+        id: 'mem-delay', userId: 'u1', tier: 'permanent' as const, category: 'observation' as const,
+        key: 'behavioral:self_report:delayed_start',
+        value: JSON.stringify({
+          description: 'User reports delaying starts',
+          epistemicStatus: 'reported',
+          type: 'behavioral',
+        }),
+        strength: 1, lastAccessedAt: '2026-01-01T00:00:00Z', expiresAt: null,
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      };
+
+      const { planner, deps } = setup({ response: 'ok', intent: 'x' }, [{ score: 20, item: existingDelayedStart }]);
+      deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+      await planner.planTurn({ userId: 'u1', userInput: 'I keep putting off things because I procrastinate', nowIso: '2026-01-02T12:00:00.000Z' });
+
+      // Even if multiple phrases matched, only 1 increment is called
+      expect((deps.memoryStore.incrementStrength as any)).toHaveBeenCalledTimes(1);
+      expect((deps.memoryStore.incrementStrength as any)).toHaveBeenCalledWith('u1', 'behavioral:self_report:delayed_start', 1);
+    });
+
+    it('reaches strength >= 2 across turns enabling hypothesis generation', async () => {
+      // Simulate session 2 where existing memory has strength 2 after reinforcement
+      const reinforcedMemory = {
+        id: 'mem-delay', userId: 'u1', tier: 'permanent' as const, category: 'observation' as const,
+        key: 'behavioral:self_report:delayed_start',
+        value: JSON.stringify({
+          description: 'User reports difficulty beginning tasks',
+          epistemicStatus: 'reported',
+          type: 'behavioral',
+        }),
+        strength: 2, // Reinforced previously
+        lastAccessedAt: '2026-01-02T00:00:00Z', expiresAt: null,
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z',
+      };
+
+      const { planner, deps } = setup({ response: 'ok', intent: 'x' }, [{ score: 25, item: reinforcedMemory }]);
+      deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+      // In session 3, user asks about their patterns
+      await planner.planTurn({ userId: 'u1', userInput: "I'm trying to improve my workflow", nowIso: '2026-01-03T12:00:00.000Z' });
+
+      // deriveRivalMemories sees strength >= 2 and emits hypothesis
+      const writeCalls = (deps.memoryStore.write as ReturnType<typeof vi.fn>).mock.calls;
+      const hypothesisWrite = writeCalls.find((args: any[]) => args[0]?.key === 'hypothesis:behavioral:self_report:delayed_start');
+      expect(hypothesisWrite).toBeDefined();
+      expect(hypothesisWrite![0].tier).toBe('permanent');
+      const parsed = JSON.parse(hypothesisWrite![0].value as string);
+      expect(parsed.epistemicStatus).toBe('hypothesis');
+    });
+
+    // ── Tweak #10 — Multi-turn cross-phrase reinforcement ─────────────────
+    it('Tweak #10: displacement phrase ("still find a reason to keep researching before I start") reinforces delayed_start from turn 1', async () => {
+      // Turn 1 created delayed_start from "I keep putting things off" (strength=1 now in DB)
+      const turn1Memory = {
+        id: 'mem-delay', userId: 'u1', tier: 'permanent' as const, category: 'observation' as const,
+        key: 'behavioral:self_report:delayed_start',
+        value: JSON.stringify({
+          description: 'User reports a recurring pattern of delaying or avoiding starting: "I keep putting things off when I have something important to start."',
+          epistemicStatus: 'reported',
+          type: 'behavioral',
+        }),
+        strength: 1,
+        lastAccessedAt: '2026-01-01T00:00:00Z', expiresAt: null,
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      };
+
+      const { planner, deps } = setup({ response: 'ok', intent: 'x' }, [{ score: 20, item: turn1Memory }]);
+      deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+      // Turn 2: naturally worded displacement phrase — different wording, same key
+      await planner.planTurn({
+        userId: 'u1',
+        userInput: "And the stupid part is that I actually know I'm doing it. I still find a reason to keep researching before I start.",
+        nowIso: '2026-01-02T12:00:00.000Z',
+      });
+
+      // Turn 2 should INCREMENT delayed_start (not create a new memory)
+      expect((deps.memoryStore.incrementStrength as any)).toHaveBeenCalledWith('u1', 'behavioral:self_report:delayed_start', 1);
+      expect((deps.memoryStore.incrementStrength as any)).toHaveBeenCalledTimes(1);
+    });
+
+    it('Tweak #10: after turn-2 reinforcement reaches strength 2, next turn emits hypothesis', async () => {
+      // strength=2 after turn-1 + turn-2 reinforcement
+      const reinforcedMemory = {
+        id: 'mem-delay', userId: 'u1', tier: 'permanent' as const, category: 'observation' as const,
+        key: 'behavioral:self_report:delayed_start',
+        value: JSON.stringify({
+          description: 'User reports a recurring pattern of delaying or avoiding starting',
+          epistemicStatus: 'reported',
+          type: 'behavioral',
+        }),
+        strength: 2,
+        lastAccessedAt: '2026-01-02T00:00:00Z', expiresAt: null,
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z',
+      };
+
+      const { planner, deps } = setup({ response: 'ok', intent: 'x' }, [{ score: 25, item: reinforcedMemory }]);
+      deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+      // Turn 3: unrelated input — hypothesis should still be derived from existing strength>=2 behavioral memory
+      await planner.planTurn({
+        userId: 'u1',
+        userInput: "What's weird is that this mostly happens when the thing matters to me.",
+        nowIso: '2026-01-03T12:00:00.000Z',
+      });
+
+      // deriveRivalMemories sees strength>=2 on delayed_start → emits hypothesis
+      const writeCalls = (deps.memoryStore.write as ReturnType<typeof vi.fn>).mock.calls;
+      const hypWrite = writeCalls.find((args: any[]) => args[0]?.key === 'hypothesis:behavioral:self_report:delayed_start');
+      expect(hypWrite).toBeDefined();
+      const parsed = JSON.parse(hypWrite![0].value as string);
+      expect(parsed.epistemicStatus).toBe('hypothesis');
+      expect(parsed.description).toContain('2 observations');
+    });
+
+    it('Tweak #12: direct disconfirmation writes epistemicStatus: "contradicted" to memoryStore for hypothesis, preserves base behavioral memory, and writes non_completion', async () => {
+      const baseMemory = {
+        id: 'mem-delay', userId: 'u1', tier: 'permanent' as const, category: 'observation' as const,
+        key: 'behavioral:self_report:delayed_start',
+        value: JSON.stringify({
+          description: 'User reports a recurring pattern of delaying or avoiding starting',
+          epistemicStatus: 'reported',
+          type: 'behavioral',
+        }),
+        strength: 2,
+        lastAccessedAt: '2026-01-02T00:00:00Z', expiresAt: null,
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z',
+      };
+
+      const hypMemory = {
+        id: 'hyp-delay', userId: 'u1', tier: 'permanent' as const, category: 'observation' as const,
+        key: 'hypothesis:behavioral:self_report:delayed_start',
+        value: JSON.stringify({
+          description: 'Possible recurring pattern (2 observations): User reports delaying starts',
+          epistemicStatus: 'hypothesis',
+          type: 'hypothesis',
+          confidence: 0.60,
+        }),
+        strength: 2,
+        lastAccessedAt: '2026-01-02T00:00:00Z', expiresAt: null,
+        createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z',
+      };
+
+      const { planner, deps } = setup({ response: 'ok', intent: 'x' }, [
+        { score: 30, item: baseMemory },
+        { score: 30, item: hypMemory },
+      ]);
+      deps.eventStore = { recentForUser: vi.fn().mockResolvedValue([]), append: vi.fn().mockResolvedValue({}) } as any;
+
+      await planner.planTurn({
+        userId: 'u1',
+        userInput: "You're right that I said that earlier, but I was describing a different situation. I can start important things quickly; what I struggle with is maintaining momentum once the novelty wears off.",
+        nowIso: '2026-01-04T12:00:00.000Z',
+      });
+
+      const writeCalls = (deps.memoryStore.write as ReturnType<typeof vi.fn>).mock.calls;
+
+      // 1. Contradicted hypothesis is persisted with updated epistemicStatus
+      const hypContradictedWrite = writeCalls.find(
+        (args: any[]) => args[0]?.key === 'hypothesis:behavioral:self_report:delayed_start',
+      );
+      expect(hypContradictedWrite).toBeDefined();
+      expect(hypContradictedWrite![0].id).toBe('hyp-delay');
+      const parsedHyp = JSON.parse(hypContradictedWrite![0].value as string);
+      expect(parsedHyp.epistemicStatus).toBe('contradicted');
+
+      // 2. Base behavioral memory was NOT overwritten with contradicted
+      const baseWrite = writeCalls.find(
+        (args: any[]) => args[0]?.key === 'behavioral:self_report:delayed_start',
+      );
+      expect(baseWrite).toBeUndefined();
+
+      // 3. New replacement memory for momentum loss is written as non_completion with reported status
+      const nonCompletionWrite = writeCalls.find(
+        (args: any[]) => args[0]?.key === 'behavioral:self_report:non_completion',
+      );
+      expect(nonCompletionWrite).toBeDefined();
+      const parsedNC = JSON.parse(nonCompletionWrite![0].value as string);
+      expect(parsedNC.epistemicStatus).toBe('reported');
+      expect(parsedNC.type).toBe('behavioral');
+    });
+
+    it('Tweak #12: fresh session with contradicted hypothesis suppresses it from prompt selection', async () => {
+      const contradictedHypMemory = {
+        id: 'hyp-delay', userId: 'u1', tier: 'permanent' as const, category: 'observation' as const,
+        key: 'hypothesis:behavioral:self_report:delayed_start',
+        value: JSON.stringify({
+          description: 'Possible recurring pattern (2 observations): User reports delaying starts',
+          epistemicStatus: 'contradicted',
+          type: 'hypothesis',
+          confidence: 0.60,
+        }),
+        strength: 2,
+        lastAccessedAt: '2026-01-02T00:00:00Z', expiresAt: null,
+        createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z',
+      };
+
+      const { planner, generate } = setup({ response: 'ok', intent: 'x' }, [
+        { score: 30, item: contradictedHypMemory },
+      ]);
+
+      await planner.planTurn({
+        userId: 'u1',
+        userInput: 'What do you think my biggest problem is when I try to get important things done?',
+        nowIso: '2026-01-05T12:00:00.000Z',
+      });
+
+      const promptCall = generate.mock.calls[0][0].prompt;
+      expect(promptCall).not.toContain('CURRENT TENTATIVE RIVAL BELIEF');
+      expect(promptCall).not.toContain('[HYPOTHESIS]');
+    });
+  });
 });
+
+

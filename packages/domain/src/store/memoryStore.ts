@@ -26,6 +26,7 @@ export interface IMemoryStore {
   write(item: WriteMemoryInput): Promise<MemoryItem>;
   retrieveRelevant(userId: string, context?: MemoryRetrievalContext): Promise<RankedMemoryItem[]>;
   compact(userId: string, nowIso?: string): Promise<{ deletedCount: number }>;
+  incrementStrength(userId: string, key: string, delta?: number): Promise<MemoryItem | null>;
 }
 
 interface MemoryRow {
@@ -179,4 +180,65 @@ export class SupabaseMemoryStore implements IMemoryStore {
     const deletedCount = Array.isArray(data) ? data.length : 0;
     return { deletedCount };
   }
+
+  /**
+   * Atomically increments the strength of an existing memory item by key for a user.
+   * Clamps strength to [0, 100].
+   */
+  async incrementStrength(userId: string, key: string, delta = 1): Promise<MemoryItem | null> {
+    if (!userId) {
+      throw new StoreValidationError('userId is required to increment memory strength.');
+    }
+    if (!key) {
+      throw new StoreValidationError('key is required to increment memory strength.');
+    }
+
+    // Try authoritative atomic RPC if available
+    try {
+      const { data, error } = await this.client.rpc<MemoryRow>('increment_memory_strength', {
+        p_user_id: userId,
+        p_key: key,
+        p_delta: delta,
+      });
+
+      if (!error && data) {
+        return mapRowToMemoryItem(data);
+      }
+    } catch {
+      // Fall through to fallback query
+    }
+
+    // Fallback via row update if RPC is unmigrated or in mock environment
+    const { data: rows, error: fetchError } = await this.client
+      .from<MemoryRow>('memory_items')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('key', key)
+      .limit(1);
+
+    if (fetchError || !rows || rows.length === 0) {
+      return null;
+    }
+
+    const row = rows[0];
+    const newStrength = Math.max(0, Math.min(100, Number(row.strength) + delta));
+
+    const { data: updated, error: updateError } = await this.client
+      .from<MemoryRow>('memory_items')
+      .update({
+        strength: newStrength,
+        last_accessed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', row.id)
+      .select()
+      .single();
+
+    if (updateError || !updated) {
+      return null;
+    }
+
+    return mapRowToMemoryItem(updated);
+  }
 }
+

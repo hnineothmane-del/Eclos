@@ -29,7 +29,10 @@ export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptio
     const relation = context.relationshipContext;
     prompt += `RIVAL RELATIONSHIP CONTEXT (deterministic delivery permissions):\n- Phase: ${relation.phase}\n- Callback depth: ${relation.callbackDepth}/4\n- Teasing warmth: ${relation.teasingWarmth}/10\n- Sincerity permission: ${relation.sincerityPermission}/10\n- Disclosure permission: ${relation.disclosurePermission}/10\n- Challenge respect: ${relation.challengeRespect}/10\n- Roast reciprocity: ${relation.roastReciprocity}/10\n- Nickname eligibility: ${relation.nicknameEligible}\n- Directives: ${relation.directives.join(' ')}\nPreserve the established relationship. Do not become warmer than earned, manufacture attachment, guilt the user for leaving, or alter challenge/relationship state.\n\n`;
   }
-  if (context.activeChallenge) prompt += `ACTIVE CHALLENGE:\n- Objective: ${context.activeChallenge.objective}\n- Status: ${context.activeChallenge.status}\n- Difficulty: ${context.activeChallenge.difficulty}\n- Verification Level: ${context.activeChallenge.verificationLevel}\n- Constraints: ${context.activeChallenge.constraints.join(', ')}\n\n`;
+  if (context.activeChallenge) {
+    prompt += `ACTIVE CHALLENGE:\n- Objective: ${context.activeChallenge.objective}\n- Status: ${context.activeChallenge.status}\n- Difficulty: ${context.activeChallenge.difficulty}\n- Verification Level: ${context.activeChallenge.verificationLevel}\n- Constraints: ${context.activeChallenge.constraints.join(', ')}\n`;
+    prompt += `(Note: This challenge is currently pending. You may reference it naturally, but DO NOT demand proof or demand the user work on it unless the selected Mode is 'challenge' or 'judgment'.)\n\n`;
+  }
   if (!context.decision && context.memories?.[0]) prompt += `RELEVANT MEMORIES:\n- [${context.memories[0].item.category}] ${context.memories[0].item.key}: ${JSON.stringify(context.memories[0].item.value)}\n\n`;
   if (!context.decision && context.recentHumor?.length) prompt += `RECENT HUMOR LEDGER (Avoid repeating these):\n- ${context.recentHumor.join('\n- ')}\n\n`;
   if (context.processCaptures && context.processCaptures.length > 0) {
@@ -54,13 +57,24 @@ export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptio
   }
   if (context.selectedRivalMemory) {
     const mem = context.selectedRivalMemory.memory;
-    prompt += `GROUNDED RIVAL MEMORY (Deterministically selected — authority: ${mem.epistemicStatus}):\n`;
-    prompt += `- [${mem.type.toUpperCase()}] ${mem.description}\n`;
-    if (mem.verbatimQuote) {
-      prompt += `- Verbatim user quote (grounded; do NOT fabricate): "${mem.verbatimQuote}"\n`;
+    if (mem.epistemicStatus === 'hypothesis') {
+      prompt += `CURRENT TENTATIVE RIVAL BELIEF\n`;
+      prompt += `This is a hypothesis The Rival currently has about the user.\n`;
+      prompt += `It is based on prior evidence but may be wrong.\n`;
+      prompt += `Use it to color your response only when relevant.\n`;
+      prompt += `Do not present it as established fact.\n`;
+      prompt += `Do not invent supporting evidence.\n`;
+      prompt += `- [HYPOTHESIS] ${mem.description}\n`;
+      prompt += `- Reason selected: ${context.selectedRivalMemory.reason}\n\n`;
+    } else {
+      prompt += `GROUNDED RIVAL MEMORY (Deterministically selected — authority: ${mem.epistemicStatus}):\n`;
+      prompt += `- [${mem.type.toUpperCase()}] ${mem.description}\n`;
+      if (mem.verbatimQuote) {
+        prompt += `- Verbatim user quote (grounded; do NOT fabricate): "${mem.verbatimQuote}"\n`;
+      }
+      prompt += `- Reason selected: ${context.selectedRivalMemory.reason}\n`;
+      prompt += `You MAY reference this memory naturally. Do NOT force it. Do NOT invent facts beyond what is stated. Do NOT treat this as a character judgment.\n\n`;
     }
-    prompt += `- Reason selected: ${context.selectedRivalMemory.reason}\n`;
-    prompt += `You MAY reference this memory naturally. Do NOT force it. Do NOT invent facts beyond what is stated. Do NOT treat ${mem.epistemicStatus === 'hypothesis' ? 'this hypothesis as an established fact' : 'this as a character judgment'}.\n\n`;
   }
   if (context.selectedInsight) {
     const ins = context.selectedInsight.insight;
@@ -131,8 +145,30 @@ export function buildCharacterPrompt(context: BuildPromptContext): GenerateOptio
   } else {
     prompt += `NO VERIFIED LIVE CONTEXT: Do not claim or imply that you checked current events or know what is happening outside the supplied context.\n\n`;
   }
-  prompt += `DETERMINISTIC RESPONSE PLAN (follow exactly):\n- Mode: ${decision.mode}\n- Serious: ${decision.serious}\n- Register: ${decision.register}\n- Intensity: ${decision.intensity}\n- Humor mechanism: ${decision.humorMechanism || 'none'}\n- Target concept: ${decision.target}\n`;
+  // For character-expression modes, 'current behavior' as a target anchors the LLM to
+  // productivity framing. Remap it to 'user statement' so the Rival engages with what was said.
+  const characterModes = new Set(['banter', 'curious', 'roast', 'observational_roast', 'supportive', 'help', 'bored']);
+  const effectiveTarget = characterModes.has(decision.mode) && (decision.target === 'current behavior' || decision.target === 'current behavior against the active challenge')
+    ? 'user statement'
+    : decision.target;
+  prompt += `DETERMINISTIC RESPONSE PLAN (follow exactly):\n- Mode: ${decision.mode}\n- Serious: ${decision.serious}\n- Register: ${decision.register}\n- Intensity: ${decision.intensity}\n- Humor mechanism: ${decision.humorMechanism || 'none'}\n- Target concept: ${effectiveTarget}\n`;
   if (decision.callback) prompt += `- Grounded callback (use only if useful): [${decision.callback.item.category}] ${decision.callback.item.key}: ${JSON.stringify(decision.callback.item.value)}\n`;
-  prompt += `\n--- INSTRUCTIONS ---\nWrite the best possible response in the selected style. Do not change the selected mode, seriousness, mechanism, or target. Do not invent memories or historical facts. Do not suggest authoritative events. DO NOT supply authoritative numeric relationship state. Use one dominant conversational idea for this turn; supporting context should remain implicit rather than becoming a list or second speech. Preserve the highest-priority situational directive and prefer silence/conciseness over stacking callbacks, insights, lore, ambient life, and live context.\n`;
+  prompt += `\n--- INSTRUCTIONS ---\n`;
+  if (decision.mode === 'banter' || decision.mode === 'curious' || decision.mode === 'observational_roast' || decision.mode === 'roast' || decision.mode === 'supportive') {
+    const humorNote = decision.humorMechanism === 'mock_formal'
+      ? 'Use mock-formal delivery: absurdly serious analysis of a ridiculous conclusion. The contrast is the joke.'
+      : decision.humorMechanism === 'absurd_escalation'
+      ? 'Use absurd escalation: take the premise somewhere unexpectedly extreme, then land it.'
+      : decision.humorMechanism === 'deadpan'
+      ? 'Use deadpan: deliver the observation with zero affect. Let the content be the joke.'
+      : '';
+    prompt += `You are The Rival responding to: "${context.userInput}". Engage with what the user actually said — their statement, question, mood, or observation. Express your reaction, opinion, or a joke grounded in this. Do NOT redirect to productivity, work, goals, or proof unless the challengeSelection block is present above. One dominant conversational idea. Keep it sharp and in character. ${humorNote} Voice texture: casual directness, cultural vernacular, and natural profanity are available when they fit — use them as punctuation not performance.\n`;
+  } else if (decision.mode === 'challenge') {
+    prompt += `Issue the deterministic challenge described above. Voice it as The Rival — skeptical, specific, in character. Do not be generic.\n`;
+  } else {
+    prompt += `Write the best possible response in the selected mode. Do not change the selected mode, seriousness, mechanism, or target.\n`;
+  }
+  prompt += `Do not invent memories or historical facts. Do not suggest authoritative events. DO NOT supply authoritative numeric relationship state. Use one dominant conversational idea for this turn; supporting context should remain implicit rather than becoming a list or second speech. Prefer silence/conciseness over stacking callbacks, insights, lore, and live context.\n`;
   return { prompt, systemPrompt: CHARACTER_SYSTEM_PROMPT };
 }
+

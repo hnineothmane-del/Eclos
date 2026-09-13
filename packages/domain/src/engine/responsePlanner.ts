@@ -10,7 +10,7 @@ import { deriveCharacterPlan, type CharacterPlan, type DirectorHumorMechanism } 
 import { deriveProcessInsights, type ProcessInsight } from './processInsights.js';
 import type { PresenceDecision } from './presenceEngine.js';
 import { inferChallengeDomain, selectChallengePrimitive, type ChallengeOutcome, type ChallengePrimitive, type ChallengeSelection } from '../challenge/challengeSelector.js';
-import { deriveRivalMemories, type RivalMemory } from './rivalMemory.js';
+import { deriveRivalMemories, memoryItemToRivalMemory, type RivalMemory } from './rivalMemory.js';
 import { selectRivalMemory, type SelectedMemory } from './rivalMemorySelector.js';
 import { deriveRivalInsights } from './rivalInsights.js';
 import { selectRivalInsight, type SelectedInsight } from './rivalInsightSelector.js';
@@ -134,7 +134,7 @@ export class ResponsePlanner {
     let rivalMemories: RivalMemory[] = [];
     let selectedRivalMemory: SelectedMemory | null = null;
     {
-      const allEvents = (activeChallenge && this.deps.eventStore)
+      const allEvents = this.deps.eventStore
         ? await this.deps.eventStore.recentForUser(userId, 100)
         : [];
       const existingMemoryItems = memories.map(r => r.item);
@@ -152,15 +152,50 @@ export class ResponsePlanner {
 
       // Persist new rival memories via existing memoryStore (category = observation / commitment / etc.)
       for (const mem of memDerivation.newMemories) {
-        if (mem.epistemicStatus !== 'hypothesis') {
+        await this.deps.memoryStore.write({
+          userId,
+          tier: mem.type === 'behavioral' || mem.type === 'relationship' || mem.type === 'hypothesis' ? 'permanent' : 'decaying',
+          category: mem.type === 'callback' ? 'running_joke' : mem.type === 'factual' ? 'commitment' : mem.type === 'behavioral' ? 'observation' : mem.type === 'relationship' ? 'milestone' : 'observation',
+          key: mem.key,
+          value: JSON.stringify({ description: mem.description, verbatimQuote: mem.verbatimQuote, epistemicStatus: mem.epistemicStatus, type: mem.type, confidence: mem.confidence, provenance: mem.provenance }),
+          strength: mem.strength,
+          expiresAt: mem.type === 'unresolved' ? null : mem.type === 'factual' ? new Date(new Date(nowIso).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString() : null,
+        }).catch(() => { /* non-blocking */ });
+      }
+
+      // Persist reinforcement for existing memories that received repeated evidence in this turn
+      const uniqueReinforcedKeys = Array.from(new Set(memDerivation.reinforcedKeys));
+      for (const key of uniqueReinforcedKeys) {
+        if (typeof this.deps.memoryStore.incrementStrength === 'function') {
+          await this.deps.memoryStore.incrementStrength(userId, key, 1).catch(() => { /* non-blocking */ });
+        }
+      }
+
+      // Persist contradicted memories (Tweak #12)
+      const uniqueContradictedKeys = Array.from(new Set(memDerivation.contradictedKeys));
+      for (const key of uniqueContradictedKeys) {
+        const existing = existingMemoryItems.find((m) => m.key === key);
+        if (existing) {
+          let parsed: Record<string, unknown> = {};
+          if (typeof existing.value === 'string') {
+            try {
+              parsed = JSON.parse(existing.value);
+            } catch {
+              parsed = { description: String(existing.value) };
+            }
+          } else if (existing.value && typeof existing.value === 'object') {
+            parsed = { ...(existing.value as Record<string, unknown>) };
+          }
+          parsed.epistemicStatus = 'contradicted';
+
           await this.deps.memoryStore.write({
+            id: existing.id,
             userId,
-            tier: mem.type === 'behavioral' || mem.type === 'relationship' ? 'permanent' : 'decaying',
-            category: mem.type === 'callback' ? 'running_joke' : mem.type === 'factual' ? 'commitment' : mem.type === 'behavioral' ? 'observation' : mem.type === 'relationship' ? 'milestone' : 'observation',
-            key: mem.key,
-            value: JSON.stringify({ description: mem.description, verbatimQuote: mem.verbatimQuote, epistemicStatus: mem.epistemicStatus, provenance: mem.provenance }),
-            strength: Math.round(mem.confidence * 100),
-            expiresAt: mem.type === 'unresolved' ? null : mem.type === 'factual' ? new Date(new Date(nowIso).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString() : null,
+            tier: existing.tier,
+            category: existing.category,
+            key: existing.key,
+            value: JSON.stringify(parsed),
+            strength: existing.strength,
           }).catch(() => { /* non-blocking */ });
         }
       }
@@ -169,17 +204,17 @@ export class ResponsePlanner {
       const isSeriousContext = characterPlan.state.seriousness >= 7;
       const isChallengeCritical = activeChallenge?.status === 'evidence_submitted' || activeChallenge?.status === 'needs_more_evidence';
 
-      // Build RivalMemory candidates from existing stored memories too
-      const storedAsRivalMemories: RivalMemory[] = memories.map(r => ({
-        key: r.item.key,
-        type: 'callback' as const,
-        epistemicStatus: 'reported' as const,
-        description: `${r.item.category}: ${String(r.item.value)}`,
-        verbatimQuote: typeof r.item.value === 'string' ? r.item.value : null,
-        confidence: r.item.strength / 100,
-        strength: r.item.strength,
-        provenance: { sourceEventIds: [], sourceInsightTypes: [], challengeId: null, derivedAt: r.item.createdAt },
-      }));
+      // Build RivalMemory candidates from existing stored memories preserving epistemic status
+      const storedAsRivalMemories: RivalMemory[] = memories.map(r => {
+        const mem = memoryItemToRivalMemory(r.item);
+        if (uniqueReinforcedKeys.includes(mem.key)) {
+          mem.strength += 1;
+        }
+        if (uniqueContradictedKeys.includes(mem.key)) {
+          mem.epistemicStatus = 'contradicted';
+        }
+        return mem;
+      });
 
       const allRivalMemories = [...storedAsRivalMemories, ...memDerivation.newMemories];
 

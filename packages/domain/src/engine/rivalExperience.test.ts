@@ -89,10 +89,12 @@ describe('Rival experience integration', () => {
     const serious = deriveCharacterPlan({ userInput: 'I feel hopeless after this setback', relationship, memories: [], activeChallenge: null, processInsights: [], recentHumor: [] });
     expect(serious).toMatchObject({ interactionMode: 'serious_intervention', humor: null });
     expect(deriveCharacterPlan({ userInput: 'tell me a joke', relationship, memories: [], activeChallenge: null, processInsights: [], recentHumor: [] }).interactionMode).toBe('banter');
+    // Low-value input ('ok') → quiet mode → no humor regardless of mood
     expect(deriveCharacterPlan({ userInput: 'ok', relationship, memories: [], activeChallenge: null, processInsights: [], recentHumor: [] }).humor).toBeNull();
     const memory = { score: 10, item: { id: 'm', userId: 'new-user', tier: 'permanent' as const, category: 'running_joke' as const, key: 'alarm', value: 'missed alarm', strength: 80, lastAccessedAt: 'x', expiresAt: null, createdAt: 'x', updatedAt: 'x' } };
     expect(deriveCharacterPlan({ userInput: 'hello again', relationship, memories: [memory], activeChallenge: null, processInsights: [], recentHumor: [] }).humor?.mechanism).toBe('callback');
-    expect(deriveCharacterPlan({ userInput: 'hello again', relationship, memories: [memory], activeChallenge: null, processInsights: [], recentHumor: ['callback'] }).humor).toBeNull();
+    // After callback cooldown, Rival uses a fallback mechanism — not the same callback again
+    expect(deriveCharacterPlan({ userInput: 'hello again', relationship, memories: [memory], activeChallenge: null, processInsights: [], recentHumor: ['callback'] }).humor?.mechanism).not.toBe('callback');
     const { planner, generate } = plannerFor();
     await planner.planTurn({ userId: 'new-user', userInput: 'tell me a joke' });
     expect(generate).toHaveBeenCalledTimes(1);

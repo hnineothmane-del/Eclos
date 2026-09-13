@@ -38,15 +38,17 @@ export interface SelectedMemory {
   reason: string;
 }
 
-/** Minimum familiarity to surface any memory at all. */
+/** Minimum familiarity to surface a callback-type memory (humor/inside jokes). */
 const MIN_FAMILIARITY_FOR_CALLBACK = 30;
 /** Minimum confidence for a hypothesis to be surfaced. */
-const MIN_HYPOTHESIS_CONFIDENCE = 0.65;
+const MIN_HYPOTHESIS_CONFIDENCE = 0.60;
 /** Cooldown: same key won't be selected twice within this count of turns. */
 const SAME_KEY_COOLDOWN_WINDOW = 5; // enforced via recentlySurfacedKeys slice
 
 const COMMITMENT_WORDS = ['tonight', 'finish', "i'll", 'promise', 'this week', 'tomorrow'];
 const CONFIDENCE_WORDS = ['i know this', 'i got this', 'easy', 'definitely', 'got it'];
+const STRUGGLE_WORDS = ["don't know", "stuck", "confused", "where to start", "help", "hard", "lost", "failing"];
+const GOAL_WORDS = ['want to', 'trying to', 'learning', 'get better at', 'improve my', 'working on', 'goal'];
 
 function normalize(text: string): string {
   return text.toLowerCase().trim();
@@ -80,6 +82,8 @@ function scoreMemory(
   // Superseded or contradicted memories should not be surfaced as callbacks.
   // Contradicted may still be surfaced as relationship observations.
   if (mem.epistemicStatus === 'superseded') return null;
+  // A contradicted hypothesis must never return as an active belief (Tweak #12)
+  if (mem.type === 'hypothesis' && mem.epistemicStatus === 'contradicted') return null;
 
   // Cooldown: same key recently surfaced
   if (recentlyUsedSet.has(mem.key)) return null;
@@ -130,6 +134,13 @@ function scoreMemory(
     hasContextualRelevance = true;
   }
 
+  // Contextual relevance: hypotheses become relevant when user expresses struggle or goals
+  if (mem.type === 'hypothesis' && (hasAny(input.userInput, STRUGGLE_WORDS) || hasAny(input.userInput, GOAL_WORDS))) {
+    score += 15;
+    reason = 'user statement relates to behavioral hypothesis';
+    hasContextualRelevance = true;
+  }
+
   // Type preference by context
   if (mem.type === 'unresolved') { score += 10; reason = 'unresolved challenge context'; hasContextualRelevance = true; }
   if (mem.type === 'behavioral' && !input.isChallengeCritical) { score += 8; hasContextualRelevance = true; }
@@ -139,9 +150,9 @@ function scoreMemory(
     reason = 'high familiarity enables callbacks';
   }
 
-  // GATE: callback and factual types REQUIRE explicit contextual relevance.
+  // GATE: callback, factual, and hypothesis types REQUIRE explicit contextual relevance.
   // They must not surface on random unrelated turns just from base scoring.
-  if ((mem.type === 'callback' || mem.type === 'factual') && !hasContextualRelevance) {
+  if ((mem.type === 'callback' || mem.type === 'factual' || mem.type === 'hypothesis') && !hasContextualRelevance) {
     return null;
   }
 
@@ -157,7 +168,6 @@ function scoreMemory(
  */
 export function selectRivalMemory(input: MemorySelectionInput): SelectedMemory | null {
   if (input.memories.length === 0) return null;
-  if (input.relationship.familiarity < 20) return null; // too early in the relationship
 
   const recentlyUsedSet = new Set(input.recentlySurfacedKeys.slice(-SAME_KEY_COOLDOWN_WINDOW));
 
